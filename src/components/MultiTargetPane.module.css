@@ -369,6 +369,11 @@
   color: var(--danger);
 }
 
+/* Cancelled before it ran/finished: a muted cross, not a red failure. */
+.targetRow[data-status="cancelled"] .targetIcon {
+  color: var(--text-muted);
+}
+
 /* A database whose executed DML affected 0 rows: ran fine, but changed nothing. */
 .targetRow[data-zero="true"] {
   background: var(--warning-bg);

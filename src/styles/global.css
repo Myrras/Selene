@@ -85,12 +85,21 @@ button:focus-visible {
 button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+  /* Drop the fill so an inert button reads as a ghost outline, not as a
+     still-pressable pill (e.g. Cancel after a query finished/cancelled). */
+  background: transparent;
 }
 
 button.primary {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-contrast);
+}
+
+/* Filled variant stays filled when disabled (dimmed by the opacity above) —
+   a transparent primary would leave low-contrast text on the toolbar. */
+button.primary:disabled {
+  background: var(--accent);
 }
 
 button.primary:hover:not(:disabled) {
