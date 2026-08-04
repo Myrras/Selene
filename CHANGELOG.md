@@ -8,6 +8,19 @@ Internal refactors, tooling, and chores are intentionally omitted. (Automated
 changelog generation from Conventional Commits via git-cliff is planned but not
 yet set up.)
 
+## [1.4.8] - 2026-08-04
+
+### Fixed
+
+- **"Run on multiple targets" no longer freezes the app on big runs.** Running
+  across hundreds or thousands of databases made the whole application grind to
+  a halt: every per-database progress update redrew the entire pane, and the
+  progress list rendered a row for every target. Progress updates are now
+  batched (about ten refreshes per second) and the list only draws the rows in
+  view, so the app stays responsive however many databases the run spans. Error
+  messages in the progress list show on one line, with the full text in a
+  tooltip.
+
 ## [1.4.7] - 2026-08-04
 
 ### Added
