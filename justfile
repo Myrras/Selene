@@ -19,7 +19,7 @@ dev:
 # One-time setup: create a self-signed *Code Signing* certificate named
 # "Selene Dev" (Keychain Access → Certificate Assistant → Create a Certificate);
 # to use a different name, edit src-tauri/tauri.dev-signed.conf.json.
-dev-signed:
+dev-signed: _signed-conf
     pnpm tauri build --debug --bundles app --config src-tauri/tauri.dev-signed.conf.json
     @just sweep
     open target/debug/bundle/macos/Selene.app
@@ -49,7 +49,7 @@ build:
 # or run `just install-signed`.
 # Only the .app is built (--bundles app): the .dmg step (bundle_dmg.sh) drives
 # Finder via AppleScript and isn't needed for a personal install.
-build-signed:
+build-signed: _signed-conf
     pnpm install
     pnpm tauri build --bundles app --config src-tauri/tauri.dev-signed.conf.json
     @just sweep
@@ -60,6 +60,12 @@ install-signed: build-signed
     rm -rf "/Applications/Selene.app"
     cp -R target/release/bundle/macos/Selene.app "/Applications/Selene.app"
     @echo "Installed → /Applications/Selene.app"
+
+# Guard for the two signed recipes. The config is gitignored (it names *your*
+# machine's signing identity), so a fresh clone or git worktree does not have it
+# and tauri would fail with an opaque config error instead.
+_signed-conf:
+    @test -f src-tauri/tauri.dev-signed.conf.json || { echo "error: src-tauri/tauri.dev-signed.conf.json is missing."; echo "It is gitignored (machine-specific signing identity), so copy it from another checkout of this repo, or create it per 'macOS keychain prompt during development' in CLAUDE.md."; echo "Your identities: security find-identity -v -p codesigning"; exit 1; }
 
 # Type-check the whole Rust workspace without building.
 check:
