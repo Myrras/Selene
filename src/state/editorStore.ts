@@ -444,13 +444,17 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       })),
     ),
 
-  // Stamped here (not on `started`) so the timer covers the whole run, including
-  // the round-trip before the first event lands.
+  // Both callers reset immediately before starting a run, so this enters
+  // "running" right away rather than waiting for the backend's `started` event:
+  // that event can be seconds late (the driver may still be draining the
+  // previous query's rows), and an "idle" slot renders the empty placeholder —
+  // the run looked like nothing was happening. `startedAt` is stamped here too,
+  // so the timer covers the whole run including that wait.
   resetResult: (id) =>
     set((state) => ({
       results: {
         ...state.results,
-        [id]: { ...emptyResult(), startedAt: Date.now() },
+        [id]: { ...emptyResult(), status: "running", startedAt: Date.now() },
       },
     })),
 
