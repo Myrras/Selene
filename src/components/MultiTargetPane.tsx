@@ -52,6 +52,7 @@ import { Modal } from "./Modal";
 import {
   CancelIcon,
   CheckIcon,
+  CloseIcon,
   CopyIcon,
   DownloadIcon,
   ErrorIcon,
@@ -77,7 +78,8 @@ type GuardPrompt =
 type ProgressCategory = "ok" | "warning" | "error";
 
 /**
- * Classify one progress row, or `null` while it is still pending. A "warning"
+ * Classify one progress row, or `null` while it is still pending or was
+ * cancelled before finishing (neither is an outcome to filter on). A "warning"
  * is an execute-mode database whose DML affected 0 rows (ran, changed nothing).
  */
 function categoryOf(
@@ -86,7 +88,7 @@ function categoryOf(
 ): ProgressCategory | null {
   if (p.status === "error") return "error";
   if (p.status === "ok") return execute && p.rows === 0 ? "warning" : "ok";
-  return null; // pending
+  return null; // pending or cancelled
 }
 
 /** A timestamp suitable for a default file name. */
@@ -432,7 +434,8 @@ export function MultiTargetPane({ tabId }: MultiTargetPaneProps) {
     else if (cat === "error") errCount += 1;
   }
   const completed = view.progress.filter(
-    (p) => p.database !== "" && p.status !== "pending",
+    (p) =>
+      p.database !== "" && p.status !== "pending" && p.status !== "cancelled",
   ).length;
   const pct =
     view.runStatus === "done"
@@ -948,6 +951,8 @@ function ProgressList({
                     <CheckIcon />
                   ) : p.status === "error" ? (
                     <ErrorIcon />
+                  ) : p.status === "cancelled" ? (
+                    <CloseIcon />
                   ) : (
                     <span className="spinner" aria-hidden />
                   )}

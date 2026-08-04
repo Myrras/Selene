@@ -8,11 +8,17 @@
 //! - Dispatch is dynamic (`Box<dyn Connection>`): the connection registry holds
 //!   heterogeneous live connections uniformly. Cargo *features* gate which
 //!   drivers are *compiled*; `dyn` decides which is *selected* at runtime.
-//! - Cancellation is cooperative here ([`CancelToken`]); the Tauri layer adds a
-//!   hard abort on top (tiberius cancels by dropping the connection).
+//! - Cancellation is a [`CancelToken`]: drivers check it between row batches
+//!   *and* race their blocking awaits against it via [`CancelToken::bound`], so
+//!   a cancel interrupts even a query the server has not answered yet. The
+//!   Tauri layer then replaces the abandoned connection (closing the socket is
+//!   what makes the server abort the in-flight query).
 
+use std::future::Future;
+use std::pin::pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::task::{Poll, Waker};
 
 use serde::{Deserialize, Serialize};
 
@@ -57,12 +63,23 @@ pub enum Flow {
 
 /// A cheap, cloneable cooperative-cancellation flag.
 ///
-/// The driver checks [`CancelToken::is_cancelled`] between row batches and stops
-/// when set. This complements — and is backed by — the hard task-abort the
-/// Tauri layer performs (dropping a tiberius connection raises a server-side
-/// Attention).
+/// The driver checks [`is_cancelled`](Self::is_cancelled) between row batches
+/// and races its blocking awaits against the token via [`bound`](Self::bound),
+/// so a cancel also interrupts a query that is parked waiting on the server
+/// (no rows flowing yet — the case a flag-only token could never observe).
+///
+/// Implemented with a plain waker list instead of `tokio::sync::Notify` so the
+/// token stays dependency-free in every feature combination.
 #[derive(Clone, Debug, Default)]
-pub struct CancelToken(Arc<AtomicBool>);
+pub struct CancelToken(Arc<CancelInner>);
+
+/// Shared state behind a [`CancelToken`]: the flag plus the wakers of tasks
+/// currently parked in [`CancelToken::cancelled`].
+#[derive(Debug, Default)]
+struct CancelInner {
+    cancelled: AtomicBool,
+    wakers: Mutex<Vec<Waker>>,
+}
 
 impl CancelToken {
     /// Create a fresh, un-cancelled token.
@@ -70,14 +87,71 @@ impl CancelToken {
         Self::default()
     }
 
-    /// Request cancellation. Idempotent.
+    /// Request cancellation. Idempotent. Wakes every task parked in
+    /// [`cancelled`](Self::cancelled) / [`bound`](Self::bound).
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::SeqCst);
+        self.0.cancelled.store(true, Ordering::SeqCst);
+        let wakers = std::mem::take(
+            &mut *self
+                .0
+                .wakers
+                .lock()
+                .expect("cancel waker list mutex poisoned"),
+        );
+        for waker in wakers {
+            waker.wake();
+        }
     }
 
     /// Whether cancellation has been requested.
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::SeqCst)
+        self.0.cancelled.load(Ordering::SeqCst)
+    }
+
+    /// Resolve once cancellation is requested (immediately if it already was).
+    pub fn cancelled(&self) -> impl Future<Output = ()> + '_ {
+        std::future::poll_fn(move |cx| {
+            if self.is_cancelled() {
+                return Poll::Ready(());
+            }
+            {
+                let mut wakers = self
+                    .0
+                    .wakers
+                    .lock()
+                    .expect("cancel waker list mutex poisoned");
+                // A long-lived await polls this many times; don't grow the list
+                // with clones of the same task's waker.
+                if !wakers.iter().any(|w| w.will_wake(cx.waker())) {
+                    wakers.push(cx.waker().clone());
+                }
+            }
+            // Re-check after registering: a `cancel()` racing in between has
+            // already drained the list and would otherwise never wake us.
+            if self.is_cancelled() {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        })
+    }
+
+    /// Await `fut`, aborting with [`CoreError::Cancelled`] the moment this
+    /// token fires (checked first, so a pre-cancelled token never polls `fut`).
+    ///
+    /// On cancellation `fut` is dropped mid-flight, which abandons whatever
+    /// wire conversation it was in — the caller owns cleaning up the underlying
+    /// connection (drop it, or reconnect) before reusing it.
+    pub async fn bound<F: Future>(&self, fut: F) -> Result<F::Output, CoreError> {
+        let mut fut = pin!(fut);
+        let mut cancelled = pin!(self.cancelled());
+        std::future::poll_fn(move |cx| {
+            if cancelled.as_mut().poll(cx).is_ready() {
+                return Poll::Ready(Err(CoreError::Cancelled));
+            }
+            fut.as_mut().poll(cx).map(Ok)
+        })
+        .await
     }
 }
 
@@ -490,5 +564,44 @@ pub fn driver_for(id: DriverId) -> Result<Box<dyn DatabaseDriver>, CoreError> {
         other => Err(CoreError::Unsupported(format!(
             "driver {other:?} is not available in this build"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn bound_passes_a_ready_future_through() {
+        let token = CancelToken::new();
+        let out = token.bound(async { 7 }).await.expect("not cancelled");
+        assert_eq!(out, 7);
+    }
+
+    #[tokio::test]
+    async fn bound_short_circuits_a_precancelled_token() {
+        let token = CancelToken::new();
+        token.cancel();
+        // The future would resolve fine — the cancel check must win first.
+        let err = token.bound(async { 7 }).await.expect_err("cancelled");
+        assert!(matches!(err, CoreError::Cancelled));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cancel_wakes_a_parked_bound_future() {
+        // The regression this token exists for: a future that never resolves on
+        // its own (a query the server hasn't answered) must be interrupted the
+        // moment `cancel()` fires from elsewhere.
+        let token = CancelToken::new();
+        let canceller = token.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            canceller.cancel();
+        });
+        let err = token
+            .bound(std::future::pending::<()>())
+            .await
+            .expect_err("woken by cancel");
+        assert!(matches!(err, CoreError::Cancelled));
     }
 }

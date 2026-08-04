@@ -5,15 +5,17 @@
 //! command returns a [`QueryHandle`] immediately (it does **not** await the
 //! task), so the UI gets the cancellation handle before the first row arrives.
 //!
-//! ## Cancellation (v0.1 limitation)
-//! Cancellation is **cooperative**: the core checks the [`CancelToken`] between
-//! row batches, so [`query_cancel`] interrupts a query *between batches*, not
-//! mid-batch. A query that is blocked server-side **before its first batch**
-//! (e.g. waiting on a lock, or a long-running aggregate that has not yet
-//! produced rows) will not stop instantly — the token is only observed once the
-//! driver next yields control. A hard server-side cancel (dropping the
-//! connection to raise an Attention, plus connection pooling so the session
-//! stays usable) is deferred past v0.1.
+//! ## Cancellation
+//! [`query_cancel`] flips the [`CancelToken`]; the core races every blocking
+//! await against it ([`CancelToken::bound`]), so the run stops promptly even
+//! while the server has not produced a row yet (long aggregate, blocked on a
+//! lock). A cancel abandons the wire conversation mid-stream, so afterwards the
+//! session's connection is **replaced** ([`refresh_session_connection`]):
+//! dropping the old socket is what makes the server abort the in-flight query,
+//! and the fresh connection (with the session's database context restored)
+//! keeps the session usable without the UI noticing. If the reconnect fails the
+//! session is closed and `session:lost` is emitted — the same recovery flow the
+//! health heartbeat uses.
 
 use std::time::Instant;
 
@@ -234,7 +236,17 @@ async fn run_query_task<R: Runtime>(
     let result = {
         let mut sessions = state.sessions.lock().await;
         match sessions.get_mut(&session_id) {
-            Some(session) => session.conn.execute(&sql, &opts, &mut sink, &cancel).await,
+            Some(session) => {
+                let result = session.conn.execute(&sql, &opts, &mut sink, &cancel).await;
+                if matches!(result, Err(selene_core::CoreError::Cancelled)) {
+                    // The cancel abandoned the wire conversation mid-stream:
+                    // the server may still be executing and the connection's
+                    // protocol state is undefined. Replace it (still under the
+                    // lock, so nothing can touch the dead connection first).
+                    refresh_session_connection(&app, &mut sessions, &session_id).await;
+                }
+                result
+            }
             None => Err(selene_core::CoreError::Config(format!(
                 "session '{session_id}' disconnected before the query ran"
             ))),
@@ -284,11 +296,79 @@ async fn run_query_task<R: Runtime>(
         .remove(&query_id);
 }
 
+/// Rebuild a session's connection after a cancelled query.
+///
+/// Reconnects from the originating spec (password via the in-process secret
+/// cache — no keychain prompt) and restores the session's last known database.
+/// Replacing `conn` drops the old connection, whose closing socket makes the
+/// server abort the still-running query. If the reconnect fails the session is
+/// removed and `session:lost` is emitted, reusing the health heartbeat's
+/// recovery flow (the UI offers a reconnect).
+async fn refresh_session_connection<R: Runtime>(
+    app: &AppHandle<R>,
+    sessions: &mut std::collections::HashMap<String, crate::state::SessionEntry>,
+    session_id: &str,
+) {
+    use tauri::{Emitter, Manager};
+    let state = app.state::<AppState>();
+
+    let (connection_id, current_database) = match sessions.get(session_id) {
+        Some(entry) => (entry.connection_id.clone(), entry.current_database.clone()),
+        None => return,
+    };
+
+    let fresh = async {
+        let spec = state.store.get(&connection_id)?.ok_or_else(|| {
+            selene_core::CoreError::Config(format!("connection '{connection_id}' no longer exists"))
+        })?;
+        let secret = state.cached_secret(&connection_id)?.ok_or_else(|| {
+            selene_core::CoreError::Config(format!(
+                "no cached password for connection '{connection_id}'"
+            ))
+        })?;
+        let mut conn = selene_core::driver_for(spec.driver)?
+            .connect(&spec, &secret)
+            .await?;
+        // Best-effort: restore the database the session was using (a fresh
+        // connection starts at the spec's default). A failure here (e.g. the
+        // database was dropped meanwhile) still leaves a usable connection.
+        if let Some(db) = current_database.as_deref() {
+            if let Err(err) = conn.use_database(db).await {
+                tracing::warn!(%session_id, "could not restore database after cancel: {err}");
+            }
+        }
+        Ok::<_, selene_core::CoreError>(conn)
+    }
+    .await;
+
+    match fresh {
+        Ok(conn) => {
+            if let Some(entry) = sessions.get_mut(session_id) {
+                entry.conn = conn;
+                tracing::info!(%session_id, "connection replaced after cancelled query");
+            }
+        }
+        Err(err) => {
+            tracing::warn!(%session_id, "reconnect after cancelled query failed: {err}; closing session");
+            sessions.remove(session_id);
+            let _ = app.emit(
+                "session:lost",
+                super::health::SessionLost {
+                    session_id: session_id.to_string(),
+                    connection_id,
+                },
+            );
+        }
+    }
+}
+
 /// Request cancellation of an in-flight query.
 ///
-/// Looks up the query's [`CancelToken`] and flips it; the running task observes
-/// it between row batches and ends with a `Cancelled` event. Cancelling an
-/// unknown or already-finished `query_id` is a no-op.
+/// Looks up the query's [`CancelToken`] and flips it; the core observes it
+/// immediately (its blocking awaits race against the token) and the task ends
+/// with a `Cancelled` event, after which the session's connection is replaced
+/// so the server-side query is really aborted. Cancelling an unknown or
+/// already-finished `query_id` is a no-op.
 #[tauri::command]
 pub async fn query_cancel(state: State<'_, AppState>, query_id: String) -> Result<(), IpcError> {
     let token = state

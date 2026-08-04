@@ -30,7 +30,8 @@ export interface TargetProgress {
   server: string;
   /** Empty string marks a server-level failure (no specific database). */
   database: string;
-  status: "pending" | "ok" | "error";
+  /** `cancelled` = still pending when the run was cancelled (never ran/finished). */
+  status: "pending" | "ok" | "error" | "cancelled";
   /** Rows returned (results mode); `null` otherwise. */
   rows: number | null;
   error: string | null;
@@ -255,6 +256,11 @@ export const useMultiTargetStore = create<MultiTargetState>((set) => {
         ...prev,
         runStatus: "cancelled",
         runId: null,
+        // Rows still in flight when the run was cancelled never finish — flip
+        // them to `cancelled` so the UI stops showing a spinner for them.
+        progress: prev.progress.map((p) =>
+          p.status === "pending" ? { ...p, status: "cancelled" } : p,
+        ),
       })),
   };
 });
