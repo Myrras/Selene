@@ -8,6 +8,18 @@ Internal refactors, tooling, and chores are intentionally omitted. (Automated
 changelog generation from Conventional Commits via git-cliff is planned but not
 yet set up.)
 
+## [1.4.5] - 2026-08-04
+
+### Fixed
+
+- **`SET` is highlighted as a keyword again.** In statements like
+  `UPDATE invoices SET deleted = '2026-01-31' WHERE id = 42`, `SET` was coloured
+  like a column name instead of like `UPDATE` and `WHERE`. The same went for
+  `PARTITION`, `SEQUENCE`, `MODIFY`, `IDENTITY`, `FILTER` and a handful of other
+  reserved words. They now read as keywords in the query editor and in the
+  multi-target filter/query editors. Function names (`GETDATE`, `COUNT`, …) are
+  unchanged.
+
 ## [1.4.4] - 2026-08-04
 
 ### Fixed
