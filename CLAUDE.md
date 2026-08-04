@@ -152,7 +152,11 @@ or frontend change needed.**
   `current_database`, `create_table`, and `import_rows` (pulls from a `RowSource`).
 - `CellValue` is driver-neutral; **decimals are strings** (no precision loss);
   unknown types become `CellValue::Unsupported` (lossless).
-- Cancellation is **cooperative** (`CancelToken`, checked between row batches).
+- Cancellation: `CancelToken` is awaitable — drivers race every blocking await
+  against it (`CancelToken::bound`), so a cancel interrupts even a query the
+  server has not answered yet. After a mid-query cancel the Tauri layer
+  replaces the session's connection (the closed socket makes the server abort
+  the in-flight query); multi-target runs drop their transient connections.
 
 ### Tauri IPC contract
 

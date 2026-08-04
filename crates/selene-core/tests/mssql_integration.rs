@@ -735,6 +735,49 @@ async fn cooperative_cancellation_stops_mid_stream() {
     );
 }
 
+#[tokio::test]
+#[ignore = "requires Docker; run with --ignored"]
+async fn cancel_interrupts_a_server_side_wait() {
+    // Regression for "the cancel button does nothing": a batch the server has
+    // not answered yet (here parked in WAITFOR DELAY) never reaches a batch
+    // boundary, so a flag-only token was never observed. The awaitable token
+    // must interrupt the blocking await promptly.
+    let mut fixture = start_mssql().await;
+    let conn = fixture.conn.as_mut();
+
+    let cancel = CancelToken::new();
+    let canceller = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        canceller.cancel();
+    });
+
+    let mut sink = CollectingSink::new();
+    let started = std::time::Instant::now();
+    let err = conn
+        .execute(
+            "WAITFOR DELAY '00:00:20'; SELECT 1 AS one",
+            &ExecOptions::default(),
+            &mut sink,
+            &cancel,
+        )
+        .await
+        .expect_err("a cancelled execution returns Err");
+
+    assert!(
+        matches!(err, CoreError::Cancelled),
+        "expected CoreError::Cancelled, got {err:?}"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "cancel must interrupt the server-side wait promptly, took {:?}",
+        started.elapsed()
+    );
+    // NB: the connection is intentionally not reused after this — the abandoned
+    // TDS conversation leaves its protocol state undefined (the app layer
+    // replaces the connection after a cancel).
+}
+
 // ---------------------------------------------------------------------------
 // 7. introspection
 // ---------------------------------------------------------------------------

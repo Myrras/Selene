@@ -10,15 +10,17 @@
 //! `on_set_end` whenever the set changes or the stream ends.
 //!
 //! ## Cancellation semantics
-//! Cancellation is **cooperative**: we check [`CancelToken::is_cancelled`] at
-//! every batch boundary (and before the first poll). On cancellation we stop
-//! polling immediately and return [`CoreError::Cancelled`]. Dropping the
-//! `QueryStream` (which happens as this function returns) releases tiberius'
-//! borrow of the connection; the Tauri layer's hard task-abort then drops the
-//! whole connection, which raises a server-side Attention to actually stop a
-//! long-running query. Returning `Cancelled` (rather than a partial `Ok`) keeps
-//! the contract unambiguous: a cancelled execution did not "succeed", and the
-//! rows already delivered to the sink remain valid for display.
+//! Every blocking await (submitting the batch, pulling the next stream item) is
+//! raced against the [`CancelToken`] via [`CancelToken::bound`], so a cancel
+//! interrupts the query even while the server has not produced a single row yet
+//! (long aggregate, blocked on a lock) — not just at batch boundaries. On
+//! cancellation we return [`CoreError::Cancelled`] with the TDS conversation
+//! abandoned mid-stream; the connection's protocol state is then undefined, and
+//! the Tauri layer replaces the session's connection (closing the socket, which
+//! makes the server abort the in-flight batch). Returning `Cancelled` (rather
+//! than a partial `Ok`) keeps the contract unambiguous: a cancelled execution
+//! did not "succeed", and the rows already delivered to the sink remain valid
+//! for display.
 //!
 //! ## Row cap
 //! `opts.max_rows` caps the total rows delivered across all sets. When the cap
@@ -54,12 +56,12 @@ pub(crate) async fn run_query(
     sink: &mut dyn RowSink,
     cancel: &CancelToken,
 ) -> Result<ExecOutcome, CoreError> {
-    // Bail out before doing any work if cancellation already fired.
-    if cancel.is_cancelled() {
-        return Err(CoreError::Cancelled);
-    }
-
-    let stream = client.simple_query(sql).await.map_err(map_tiberius_err)?;
+    // Submitting the batch already blocks until the server starts answering, so
+    // race it against the token too (this also covers a pre-cancelled token).
+    let stream = cancel
+        .bound(client.simple_query(sql))
+        .await?
+        .map_err(map_tiberius_err)?;
 
     pump(stream, opts, sink, cancel).await
 }
@@ -84,16 +86,13 @@ pub(crate) async fn run_exec_counting(
     sink: &mut dyn RowSink,
     cancel: &CancelToken,
 ) -> Result<ExecOutcome, CoreError> {
-    // Cancellation is best-effort on this path: `execute()` is a single
-    // round-trip with no intra-statement yield point, so we honour a pre-fire
-    // cancel and otherwise rely on the Tauri layer's hard task-abort (which
-    // drops the connection) for a long-running DML — consistent with the
-    // documented v0.1 cooperative-cancellation model.
-    if cancel.is_cancelled() {
-        return Err(CoreError::Cancelled);
-    }
-
-    let result = client.execute(sql, &[]).await.map_err(map_tiberius_err)?;
+    // `execute()` is a single round-trip with no intra-statement yield point,
+    // so the whole await is raced against the token: a cancel interrupts even a
+    // long-running DML (the Tauri layer then replaces the abandoned connection).
+    let result = cancel
+        .bound(client.execute(sql, &[]))
+        .await?
+        .map_err(map_tiberius_err)?;
     let rolled_back = crate::guard::is_rollback_wrapped_dml_batch(sql);
     let counts = trim_wrapper_counts(sql, result.rows_affected());
 
@@ -149,12 +148,14 @@ where
     let mut sink_stop = false;
 
     loop {
-        // Cooperative cancellation check at every iteration boundary.
-        if cancel.is_cancelled() {
-            return Err(CoreError::Cancelled);
-        }
-
-        let item = match stream.try_next().await.map_err(map_tiberius_err)? {
+        // Race the next stream item against the token: this is where the pump
+        // parks while the server is still computing, so an unraced await here
+        // is exactly what made the cancel button a no-op on a silent query.
+        let item = match cancel
+            .bound(stream.try_next())
+            .await?
+            .map_err(map_tiberius_err)?
+        {
             Some(item) => item,
             None => break, // stream exhausted
         };
@@ -376,6 +377,28 @@ mod tests {
         let err = pump(empty_stream(), &opts, &mut sink, &cancel)
             .await
             .expect_err("cancelled before first poll");
+        assert!(matches!(err, CoreError::Cancelled));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cancel_interrupts_a_stream_that_never_yields() {
+        // The reported bug: a query the server has not answered yet parks the
+        // pump inside `try_next().await`, where a flag-only token was never
+        // observed. The awaitable token must wake it and return `Cancelled`.
+        let mut sink = RecordingSink::default();
+        let opts = ExecOptions::default();
+        let cancel = CancelToken::new();
+
+        let canceller = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            canceller.cancel();
+        });
+
+        let silent = stream::pending::<Result<QueryItem, tiberius::error::Error>>();
+        let err = pump(Box::pin(silent), &opts, &mut sink, &cancel)
+            .await
+            .expect_err("woken by cancel");
         assert!(matches!(err, CoreError::Cancelled));
     }
 

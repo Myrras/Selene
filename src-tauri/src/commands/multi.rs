@@ -25,10 +25,12 @@
 //! above `DEBUG`/`TRACE`. Server/database names and aggregate counts are safe.
 //!
 //! ## Cancellation
-//! Cooperative, reusing the shared [`CancelToken`] registry in
+//! Reuses the shared [`CancelToken`] registry in
 //! [`AppState::running`](crate::state::AppState::running): [`multi_target_cancel`]
-//! flips the token; the task checks it between databases and the driver checks
-//! it between row batches.
+//! flips the token. The per-target connect/`USE`/execute awaits are all raced
+//! against it ([`CancelToken::bound`]), so a cancel interrupts a run promptly
+//! even while a server is still silent; each target's transient connection is
+//! then dropped, which makes that server abort its in-flight query.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -678,7 +680,12 @@ async fn run_target<R: Runtime>(
     };
 
     let connect = match driver_for(spec.driver) {
-        Ok(driver) => driver.connect(&spec, &secret).await,
+        // Raced against the token so a cancel also interrupts a slow/hanging
+        // connect instead of waiting it out.
+        Ok(driver) => match cancel.bound(driver.connect(&spec, &secret)).await {
+            Ok(result) => result,
+            Err(_) => return, // run cancelled — not a server error
+        },
         Err(err) => Err(err),
     };
     let mut conn = match connect {
@@ -715,7 +722,13 @@ async fn run_target<R: Runtime>(
             total,
         });
 
-        if let Err(err) = conn.use_database(&database).await {
+        // Also raced against the token: a `USE` on an unreachable server must
+        // not pin a cancelled run. On cancel the connection is dropped below.
+        let switched = match cancel.bound(conn.use_database(&database)).await {
+            Ok(result) => result,
+            Err(_) => break, // run cancelled
+        };
+        if let Err(err) = switched {
             let failed_now = failed.fetch_add(1, Ordering::SeqCst) + 1;
             let _ = channel.send(MultiEvent::TargetDone {
                 connection_id: connection_id.clone(),
