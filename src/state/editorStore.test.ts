@@ -192,6 +192,22 @@ describe("editorStore result reducers", () => {
     expect(result(id).resultSets[0]?.rows ?? []).toHaveLength(1);
   });
 
+  it("stamps startedAt on reset and freezes an elapsed time on cancel", () => {
+    const id = freshTab();
+    const s = () => useEditorStore.getState();
+
+    s().resetResult(id);
+    const startedAt = result(id).startedAt;
+    expect(startedAt).not.toBeNull();
+    // Nothing to show yet — the live timer derives from startedAt while running.
+    expect(result(id).elapsedMs).toBeNull();
+
+    s().resultStarted(id, "q-1");
+    s().resultCancelled(id);
+    // The status bar keeps a duration after a cancel (no server-reported one).
+    expect(result(id).elapsedMs).toBeGreaterThanOrEqual(0);
+  });
+
   it("transitions to failed with the message on resultFailed", () => {
     const id = freshTab();
     const s = () => useEditorStore.getState();

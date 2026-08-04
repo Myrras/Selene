@@ -53,6 +53,8 @@ export interface ResultState {
   activeSet: number;
   /** Total rows across all sets, for the status bar. */
   rowCount: number;
+  /** Wall-clock start of this run (`Date.now()`), for the live status-bar timer. */
+  startedAt: number | null;
   elapsedMs: number | null;
   truncated: boolean;
   /**
@@ -129,12 +131,22 @@ function emptyResult(): ResultState {
     resultSets: [],
     activeSet: 0,
     rowCount: 0,
+    startedAt: null,
     elapsedMs: null,
     truncated: false,
     rolledBack: false,
     error: null,
     rev: 0,
   };
+}
+
+/**
+ * Elapsed time for a run that ended without a server-reported duration
+ * (cancel/failure), so the live timer freezes instead of vanishing.
+ */
+function frozenElapsed(prev: ResultState): number | null {
+  if (prev.elapsedMs != null) return prev.elapsedMs;
+  return prev.startedAt != null ? Date.now() - prev.startedAt : null;
 }
 
 let tabSeq = 0;
@@ -432,8 +444,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       })),
     ),
 
+  // Stamped here (not on `started`) so the timer covers the whole run, including
+  // the round-trip before the first event lands.
   resetResult: (id) =>
-    set((state) => ({ results: { ...state.results, [id]: emptyResult() } })),
+    set((state) => ({
+      results: {
+        ...state.results,
+        [id]: { ...emptyResult(), startedAt: Date.now() },
+      },
+    })),
 
   resultStarted: (id, queryId) =>
     // Non-destructive: `resetResult` already cleared the slot before the channel
@@ -518,6 +537,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         ...prev,
         status: "cancelled",
         queryId: null,
+        elapsedMs: frozenElapsed(prev),
         rev: prev.rev + 1,
       })),
     ),
@@ -529,6 +549,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         status: "failed",
         queryId: null,
         error: message,
+        elapsedMs: frozenElapsed(prev),
         rev: prev.rev + 1,
       })),
     ),
