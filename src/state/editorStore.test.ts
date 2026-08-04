@@ -169,7 +169,9 @@ describe("editorStore result reducers", () => {
 
     s().resetResult(id);
     const r = result(id);
-    expect(r.status).toBe("idle");
+    // Reset happens at run kickoff, so the panel shows "running" (spinner +
+    // live timer) instead of the idle placeholder while the backend starts up.
+    expect(r.status).toBe("running");
     expect(r.resultSets).toEqual([]);
     expect(r.rowCount).toBe(0);
     expect(r.error).toBeNull();
@@ -190,6 +192,24 @@ describe("editorStore result reducers", () => {
     expect(result(id).queryId).toBeNull();
     // Already-buffered rows survive cancellation.
     expect(result(id).resultSets[0]?.rows ?? []).toHaveLength(1);
+  });
+
+  it("stamps startedAt on reset and freezes an elapsed time on cancel", () => {
+    const id = freshTab();
+    const s = () => useEditorStore.getState();
+
+    s().resetResult(id);
+    // Running + a start stamp from the moment the run is kicked off, so the
+    // spinner and timer are visible before the backend's `started` event lands.
+    expect(result(id).status).toBe("running");
+    expect(result(id).startedAt).not.toBeNull();
+    // Nothing to show yet — the live timer derives from startedAt while running.
+    expect(result(id).elapsedMs).toBeNull();
+
+    s().resultStarted(id, "q-1");
+    s().resultCancelled(id);
+    // The status bar keeps a duration after a cancel (no server-reported one).
+    expect(result(id).elapsedMs).toBeGreaterThanOrEqual(0);
   });
 
   it("transitions to failed with the message on resultFailed", () => {

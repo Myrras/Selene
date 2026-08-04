@@ -8,6 +8,71 @@ Internal refactors, tooling, and chores are intentionally omitted. (Automated
 changelog generation from Conventional Commits via git-cliff is planned but not
 yet set up.)
 
+## [1.4.7] - 2026-08-04
+
+### Added
+
+- **You can see how long a query has been running.** The results status bar used
+  to show a spinner and nothing else until the query finished; it now counts the
+  elapsed time while the query runs, and keeps the duration visible when a run is
+  cancelled or fails. Times read as `842 ms`, `2.4 s` or `1m 05s` instead of a
+  raw millisecond count.
+
+### Fixed
+
+- **Starting a query no longer looks like nothing is happening.** Running a
+  second query right after the first emptied the results tab and showed the
+  "Run a query to see results" placeholder — sometimes for several seconds, while
+  the query was in fact already on its way. The spinner and the elapsed time now
+  appear the moment you hit run.
+
+## [1.4.6] - 2026-08-04
+
+### Fixed
+
+- **The height you drag the results panel to is remembered.** Resizing the split
+  between the query editor and the results panel only lasted until you switched
+  tabs — every tab switch, and every restart, snapped it back. The split is now
+  saved with the rest of your layout (sidebar width, panel heights) and applies
+  to every tab.
+
+### Changed
+
+- **The results panel starts smaller than the query editor.** It used to open as
+  the larger of the two; the editor now gets roughly two thirds of the height by
+  default. Drag the splitter to whatever you prefer — it sticks.
+
+## [1.4.5] - 2026-08-04
+
+### Fixed
+
+- **`SET` is highlighted as a keyword again.** In statements like
+  `UPDATE invoices SET deleted = '2026-01-31' WHERE id = 42`, `SET` was coloured
+  like a column name instead of like `UPDATE` and `WHERE`. The same went for
+  `PARTITION`, `SEQUENCE`, `MODIFY`, `IDENTITY`, `FILTER` and a handful of other
+  reserved words. They now read as keywords in the query editor and in the
+  multi-target filter/query editors. Function names (`GETDATE`, `COUNT`, …) are
+  unchanged.
+
+## [1.4.4] - 2026-08-04
+
+### Fixed
+
+- **`SELECT … INTO` reports its row count instead of "No result set".** A query
+  that copies rows into a new table ran fine but looked like it had done nothing.
+  It now shows "<n> rows affected", like SQL Server does. Because it creates and
+  fills a table, it also counts as a write: the guard asks for confirmation, and
+  it is refused on a read-only connection. Copies into a temporary table
+  (`INTO #tmp`) keep working as before.
+- **`INSERT INTO … SELECT` inside a transaction reports its row count.** Wrapped
+  in `BEGIN TRAN … ROLLBACK` (or `COMMIT`) it showed "No result set" instead of
+  the number of rows it inserted — handy for dry-running an insert before
+  committing it.
+- **An `UPDATE` on a table with triggers shows one row count, not three.** Rows
+  written by server-side triggers or cascades were reported as extra empty result
+  sets (e.g. "0, 0, 273"), so you had to guess which number was yours. A
+  single-statement batch now reports just its own count.
+
 ## [1.4.3] - 2026-07-07
 
 ### Fixed

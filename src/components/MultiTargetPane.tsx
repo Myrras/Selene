@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
-import { sql, MSSQL } from "@codemirror/lang-sql";
+import { sql } from "@codemirror/lang-sql";
 import { EditorView } from "@codemirror/view";
 import { githubDark, githubLight } from "@uiw/codemirror-theme-github";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -36,6 +36,7 @@ import type {
 } from "../ipc/types";
 import { buildScriptText } from "../lib/multiTargetScript";
 import { useConnections } from "../lib/queries";
+import { MSSQLDialect } from "../lib/sqlDialect";
 import { useEditorStore } from "../state/editorStore";
 import {
   createProgressBuffer,
@@ -1106,7 +1107,7 @@ function MiniSqlEditor({
   const fontSize = useSettingsStore((s) => s.editor.fontSize);
   const extensions = useMemo(
     () => [
-      sql({ dialect: MSSQL }),
+      sql({ dialect: MSSQLDialect }),
       EditorView.lineWrapping,
       EditorView.theme({
         "&": { fontSize: `${fontSize}px` },
