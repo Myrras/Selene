@@ -8,6 +8,22 @@ Internal refactors, tooling, and chores are intentionally omitted. (Automated
 changelog generation from Conventional Commits via git-cliff is planned but not
 yet set up.)
 
+## [1.4.6] - 2026-08-04
+
+### Fixed
+
+- **The height you drag the results panel to is remembered.** Resizing the split
+  between the query editor and the results panel only lasted until you switched
+  tabs — every tab switch, and every restart, snapped it back. The split is now
+  saved with the rest of your layout (sidebar width, panel heights) and applies
+  to every tab.
+
+### Changed
+
+- **The results panel starts smaller than the query editor.** It used to open as
+  the larger of the two; the editor now gets roughly two thirds of the height by
+  default. Drag the splitter to whatever you prefer — it sticks.
+
 ## [1.4.5] - 2026-08-04
 
 ### Fixed
