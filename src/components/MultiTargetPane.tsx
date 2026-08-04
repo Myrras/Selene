@@ -33,6 +33,7 @@ import type {
   MultiEvent,
   MultiMode,
 } from "../ipc/types";
+import { keepIndentOnEnter } from "../lib/editorKeymap";
 import { buildScriptText } from "../lib/multiTargetScript";
 import { useConnections } from "../lib/queries";
 import { useEditorStore } from "../state/editorStore";
@@ -1029,6 +1030,7 @@ function MiniSqlEditor({
   const extensions = useMemo(
     () => [
       sql({ dialect: MSSQL }),
+      keepIndentOnEnter,
       EditorView.lineWrapping,
       EditorView.theme({
         "&": { fontSize: `${fontSize}px` },

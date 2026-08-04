@@ -22,6 +22,7 @@ import { search } from "@codemirror/search";
 import { githubDark, githubLight } from "@uiw/codemirror-theme-github";
 
 import type { DriverId } from "../ipc/types";
+import { keepIndentOnEnter } from "../lib/editorKeymap";
 import { dialectFor } from "../lib/sqlDialect";
 import { selectSql, useEditorStore } from "../state/editorStore";
 import { useThemeStore } from "../state/themeStore";
@@ -192,6 +193,7 @@ export function SqlEditor({
         ? javascript()
         : sql({ dialect, upperCaseKeywords: editor.upperCaseKeywords }),
       editorKeymap,
+      keepIndentOnEnter,
       // Provides the search state the overlay drives via `setSearchQuery`; its
       // own panel is never opened, so only the query/highlight machinery is used.
       search(),
