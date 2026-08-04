@@ -1,4 +1,7 @@
-/** Persistent sidebar layout: width, panel order, collapsed state, panel heights. */
+/**
+ * Persistent sidebar layout: width, panel order, collapsed state, panel heights,
+ * plus the editor/results split of the work area.
+ */
 
 import { create } from "zustand";
 
@@ -9,6 +12,8 @@ interface LayoutPersisted {
   panelOrder: PanelId[];
   collapsed: { connections: boolean; files: boolean; schema: boolean };
   panelH: { connections: number; files: number; schema: number };
+  /** Editor's share of the work-area height, in percent. */
+  editorPct: number;
 }
 
 const STORAGE_KEY = "selene.layout";
@@ -18,6 +23,9 @@ const DEFAULTS: LayoutPersisted = {
   panelOrder: ["connections", "files", "schema"],
   collapsed: { connections: false, files: false, schema: false },
   panelH: { connections: 200, files: 160, schema: 240 },
+  // The editor is where you work; results are a readout. Give the editor
+  // roughly two thirds by default.
+  editorPct: 68,
 };
 
 function load(): LayoutPersisted {
@@ -49,55 +57,37 @@ export interface LayoutState extends LayoutPersisted {
   setPanelOrder: (order: PanelId[]) => void;
   toggleCollapsed: (panel: PanelId) => void;
   setPanelH: (panel: PanelId, h: number) => void;
+  setEditorPct: (pct: number) => void;
 }
 
 export const useLayoutStore = create<LayoutState>((set, get) => {
-  const initial = load();
+  // Every setter writes the same way: merge the patch into state and mirror the
+  // persisted slice to localStorage. Keeps the field list in DEFAULTS only.
+  const save = (patch: Partial<LayoutPersisted>) => {
+    const next = { ...get(), ...patch };
+    persist({
+      sidebarWidth: next.sidebarWidth,
+      panelOrder: next.panelOrder,
+      collapsed: next.collapsed,
+      panelH: next.panelH,
+      editorPct: next.editorPct,
+    });
+    set(patch);
+  };
+
   return {
-    ...initial,
-    setSidebarWidth: (w) => {
-      const sidebarWidth = Math.min(600, Math.max(160, w));
-      const s = get();
-      persist({
-        sidebarWidth,
-        panelOrder: s.panelOrder,
-        collapsed: s.collapsed,
-        panelH: s.panelH,
-      });
-      set({ sidebarWidth });
-    },
-    setPanelOrder: (panelOrder) => {
-      const s = get();
-      persist({
-        sidebarWidth: s.sidebarWidth,
-        panelOrder,
-        collapsed: s.collapsed,
-        panelH: s.panelH,
-      });
-      set({ panelOrder });
-    },
-    toggleCollapsed: (panel) => {
-      const s = get();
-      const collapsed = { ...s.collapsed, [panel]: !s.collapsed[panel] };
-      persist({
-        sidebarWidth: s.sidebarWidth,
-        panelOrder: s.panelOrder,
-        collapsed,
-        panelH: s.panelH,
-      });
-      set({ collapsed });
-    },
-    setPanelH: (panel, h) => {
-      const clamped = Math.min(800, Math.max(80, h));
-      const s = get();
-      const panelH = { ...s.panelH, [panel]: clamped };
-      persist({
-        sidebarWidth: s.sidebarWidth,
-        panelOrder: s.panelOrder,
-        collapsed: s.collapsed,
-        panelH,
-      });
-      set({ panelH });
-    },
+    ...load(),
+    setSidebarWidth: (w) =>
+      save({ sidebarWidth: Math.min(600, Math.max(160, w)) }),
+    setPanelOrder: (panelOrder) => save({ panelOrder }),
+    toggleCollapsed: (panel) =>
+      save({
+        collapsed: { ...get().collapsed, [panel]: !get().collapsed[panel] },
+      }),
+    setPanelH: (panel, h) =>
+      save({
+        panelH: { ...get().panelH, [panel]: Math.min(800, Math.max(80, h)) },
+      }),
+    setEditorPct: (pct) => save({ editorPct: Math.min(80, Math.max(15, pct)) }),
   };
 });
