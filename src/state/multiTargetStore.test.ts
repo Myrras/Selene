@@ -140,6 +140,24 @@ describe("multiTargetStore", () => {
     expect(view().runId).toBeNull();
   });
 
+  it("cancelRun flips still-pending rows to cancelled, keeps finished ones", () => {
+    const s = useMultiTargetStore.getState();
+    s.startRun(TAB, "execute", 3, "run-1");
+    s.applyProgress(TAB, [
+      row({ status: "ok", rows: 5 }),
+      row({ database: "db2" }),
+      row({ database: "db3" }),
+    ]);
+    s.cancelRun(TAB);
+    expect(view().runStatus).toBe("cancelled");
+    expect(view().runId).toBeNull();
+    expect(view().progress.map((p) => p.status)).toEqual([
+      "ok",
+      "cancelled",
+      "cancelled",
+    ]);
+  });
+
   it("remove drops the view (tab close)", () => {
     useMultiTargetStore.getState().remove(TAB);
     expect(view()).toBeUndefined();

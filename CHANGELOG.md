@@ -8,6 +8,25 @@ Internal refactors, tooling, and chores are intentionally omitted. (Automated
 changelog generation from Conventional Commits via git-cliff is planned but not
 yet set up.)
 
+## [1.4.9] - 2026-08-04
+
+### Fixed
+
+- **Cancel now actually stops a running query.** The cancel button only took
+  effect between row batches, so a query the server had not answered yet (a
+  long-running aggregate, a query blocked on a lock) kept running as if the
+  button did nothing. Cancellation now interrupts the wait immediately, and the
+  server-side query is genuinely aborted — freeing its resources — after which
+  the connection is restored transparently (same database, no reconnect needed).
+  This applies to query documents and to "run on multiple targets", where a
+  cancel now also interrupts a slow connect or database switch.
+- **Cancelling a multi-target run marks the unfinished targets.** Targets that
+  were still waiting when you cancelled kept their loading spinner forever;
+  they now switch to a muted cross, and they are not counted as failed.
+- **Disabled buttons no longer look pressable.** An inactive button (e.g.
+  Cancel once a query has finished) kept its filled background; it now turns
+  transparent so it clearly reads as disabled.
+
 ## [1.4.8] - 2026-08-04
 
 ### Fixed
