@@ -8,6 +8,24 @@ Internal refactors, tooling, and chores are intentionally omitted. (Automated
 changelog generation from Conventional Commits via git-cliff is planned but not
 yet set up.)
 
+## [1.4.7] - 2026-08-04
+
+### Added
+
+- **You can see how long a query has been running.** The results status bar used
+  to show a spinner and nothing else until the query finished; it now counts the
+  elapsed time while the query runs, and keeps the duration visible when a run is
+  cancelled or fails. Times read as `842 ms`, `2.4 s` or `1m 05s` instead of a
+  raw millisecond count.
+
+### Fixed
+
+- **Starting a query no longer looks like nothing is happening.** Running a
+  second query right after the first emptied the results tab and showed the
+  "Run a query to see results" placeholder — sometimes for several seconds, while
+  the query was in fact already on its way. The spinner and the elapsed time now
+  appear the moment you hit run.
+
 ## [1.4.6] - 2026-08-04
 
 ### Fixed
