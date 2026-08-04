@@ -6,12 +6,13 @@
  * affected-row count instead of a grid.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { exportResult } from "../ipc/commands";
 import { createExportChannel } from "../ipc/channels";
 import { asIpcError } from "../ipc/types";
 import type { ExportFormat } from "../ipc/types";
+import { formatElapsed } from "../lib/elapsed";
 import { isMac } from "../lib/platform";
 import { useEditorStore } from "../state/editorStore";
 import type { ResultState } from "../state/editorStore";
@@ -239,6 +240,7 @@ export function ResultsPanel({ tabId }: ResultsPanelProps) {
             : result.rowCount
         }
         elapsedMs={result.elapsedMs}
+        startedAt={result.startedAt}
         truncated={result.truncated}
         readOnly={session?.readOnly ?? false}
       />
@@ -246,19 +248,42 @@ export function ResultsPanel({ tabId }: ResultsPanelProps) {
   );
 }
 
+/**
+ * Live elapsed milliseconds since `startedAt`, ticking while `active`. Returns
+ * null when there is nothing to time. 100 ms is fast enough to read as a running
+ * clock at one decimal without repainting the status bar needlessly.
+ */
+function useElapsedWhileRunning(
+  startedAt: number | null,
+  active: boolean,
+): number | null {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active || startedAt == null) return;
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 100);
+    return () => clearInterval(id);
+  }, [active, startedAt]);
+  if (!active || startedAt == null) return null;
+  return Math.max(0, now - startedAt);
+}
+
 function StatusBar({
   status,
   rowCount,
   elapsedMs,
+  startedAt,
   truncated,
   readOnly,
 }: {
   status: ResultState["status"];
   rowCount: number;
   elapsedMs: number | null;
+  startedAt: number | null;
   truncated: boolean;
   readOnly: boolean;
 }) {
+  const live = useElapsedWhileRunning(startedAt, status === "running");
   return (
     <div className={styles.statusBar}>
       <span className={`${styles.statusDot} ${styles[status]}`} aria-hidden />
@@ -267,11 +292,18 @@ function StatusBar({
       <span>
         {rowCount.toLocaleString()} row{rowCount === 1 ? "" : "s"}
       </span>
-      {elapsedMs != null && (
+      {live != null ? (
         <>
           <span className={styles.sep}>·</span>
-          <span>{elapsedMs.toLocaleString()} ms</span>
+          <span>{formatElapsed(live)}</span>
         </>
+      ) : (
+        elapsedMs != null && (
+          <>
+            <span className={styles.sep}>·</span>
+            <span>{formatElapsed(elapsedMs)}</span>
+          </>
+        )
       )}
       {truncated && (
         <>

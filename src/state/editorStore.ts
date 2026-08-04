@@ -53,6 +53,8 @@ export interface ResultState {
   activeSet: number;
   /** Total rows across all sets, for the status bar. */
   rowCount: number;
+  /** Wall-clock start of this run (`Date.now()`), for the live status-bar timer. */
+  startedAt: number | null;
   elapsedMs: number | null;
   truncated: boolean;
   /**
@@ -129,12 +131,22 @@ function emptyResult(): ResultState {
     resultSets: [],
     activeSet: 0,
     rowCount: 0,
+    startedAt: null,
     elapsedMs: null,
     truncated: false,
     rolledBack: false,
     error: null,
     rev: 0,
   };
+}
+
+/**
+ * Elapsed time for a run that ended without a server-reported duration
+ * (cancel/failure), so the live timer freezes instead of vanishing.
+ */
+function frozenElapsed(prev: ResultState): number | null {
+  if (prev.elapsedMs != null) return prev.elapsedMs;
+  return prev.startedAt != null ? Date.now() - prev.startedAt : null;
 }
 
 let tabSeq = 0;
@@ -432,8 +444,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       })),
     ),
 
+  // Both callers reset immediately before starting a run, so this enters
+  // "running" right away rather than waiting for the backend's `started` event:
+  // that event can be seconds late (the driver may still be draining the
+  // previous query's rows), and an "idle" slot renders the empty placeholder —
+  // the run looked like nothing was happening. `startedAt` is stamped here too,
+  // so the timer covers the whole run including that wait.
   resetResult: (id) =>
-    set((state) => ({ results: { ...state.results, [id]: emptyResult() } })),
+    set((state) => ({
+      results: {
+        ...state.results,
+        [id]: { ...emptyResult(), status: "running", startedAt: Date.now() },
+      },
+    })),
 
   resultStarted: (id, queryId) =>
     // Non-destructive: `resetResult` already cleared the slot before the channel
@@ -518,6 +541,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         ...prev,
         status: "cancelled",
         queryId: null,
+        elapsedMs: frozenElapsed(prev),
         rev: prev.rev + 1,
       })),
     ),
@@ -529,6 +553,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         status: "failed",
         queryId: null,
         error: message,
+        elapsedMs: frozenElapsed(prev),
         rev: prev.rev + 1,
       })),
     ),
