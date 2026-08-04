@@ -8,6 +8,25 @@ Internal refactors, tooling, and chores are intentionally omitted. (Automated
 changelog generation from Conventional Commits via git-cliff is planned but not
 yet set up.)
 
+## [1.4.4] - 2026-08-04
+
+### Fixed
+
+- **`SELECT … INTO` reports its row count instead of "No result set".** A query
+  that copies rows into a new table ran fine but looked like it had done nothing.
+  It now shows "<n> rows affected", like SQL Server does. Because it creates and
+  fills a table, it also counts as a write: the guard asks for confirmation, and
+  it is refused on a read-only connection. Copies into a temporary table
+  (`INTO #tmp`) keep working as before.
+- **`INSERT INTO … SELECT` inside a transaction reports its row count.** Wrapped
+  in `BEGIN TRAN … ROLLBACK` (or `COMMIT`) it showed "No result set" instead of
+  the number of rows it inserted — handy for dry-running an insert before
+  committing it.
+- **An `UPDATE` on a table with triggers shows one row count, not three.** Rows
+  written by server-side triggers or cascades were reported as extra empty result
+  sets (e.g. "0, 0, 273"), so you had to guess which number was yours. A
+  single-statement batch now reports just its own count.
+
 ## [1.4.3] - 2026-07-07
 
 ### Fixed
