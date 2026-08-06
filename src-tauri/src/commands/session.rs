@@ -87,6 +87,7 @@ pub async fn session_connect(
         caps,
         connection_id: connection_id.clone(),
         read_only: spec.read_only,
+        current_database: spec.database.clone(),
         conn,
     };
     state
@@ -124,6 +125,7 @@ pub async fn session_use_database(
         .get_mut(&session_id)
         .ok_or_else(|| IpcError::unknown_session(&session_id))?;
     session.conn.use_database(&database).await?;
+    session.current_database = Some(database.clone());
     tracing::info!(%session_id, %database, "session database switched");
     Ok(())
 }
@@ -249,6 +251,11 @@ pub async fn session_current_database(
         .get_mut(&session_id)
         .ok_or_else(|| IpcError::unknown_session(&session_id))?;
     let db = session.conn.current_database().await?;
+    // Keep the tracked context fresh: this is called after every finished
+    // query, so a `USE` inside a batch also lands here.
+    if !db.is_empty() {
+        session.current_database = Some(db.clone());
+    }
     Ok(db)
 }
 

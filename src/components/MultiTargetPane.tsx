@@ -13,9 +13,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
-import { sql, MSSQL } from "@codemirror/lang-sql";
+import { sql } from "@codemirror/lang-sql";
 import { EditorView } from "@codemirror/view";
 import { githubDark, githubLight } from "@uiw/codemirror-theme-github";
+import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { createMultiChannel } from "../ipc/channels";
 import {
@@ -36,11 +37,14 @@ import type {
 import { keepIndentOnEnter } from "../lib/editorKeymap";
 import { buildScriptText } from "../lib/multiTargetScript";
 import { useConnections } from "../lib/queries";
+import { MSSQLDialect } from "../lib/sqlDialect";
 import { useEditorStore } from "../state/editorStore";
 import {
+  createProgressBuffer,
   useMultiTargetStore,
   useMultiTargetView,
 } from "../state/multiTargetStore";
+import type { ProgressBuffer, TargetProgress } from "../state/multiTargetStore";
 import { useSettingsStore } from "../state/settingsStore";
 import { useThemeStore } from "../state/themeStore";
 import { toastError, toastInfo, useToastStore } from "../state/toastStore";
@@ -49,6 +53,7 @@ import { Modal } from "./Modal";
 import {
   CancelIcon,
   CheckIcon,
+  CloseIcon,
   CopyIcon,
   DownloadIcon,
   ErrorIcon,
@@ -74,7 +79,8 @@ type GuardPrompt =
 type ProgressCategory = "ok" | "warning" | "error";
 
 /**
- * Classify one progress row, or `null` while it is still pending. A "warning"
+ * Classify one progress row, or `null` while it is still pending or was
+ * cancelled before finishing (neither is an outcome to filter on). A "warning"
  * is an execute-mode database whose DML affected 0 rows (ran, changed nothing).
  */
 function categoryOf(
@@ -83,7 +89,7 @@ function categoryOf(
 ): ProgressCategory | null {
   if (p.status === "error") return "error";
   if (p.status === "ok") return execute && p.rows === 0 ? "warning" : "ok";
-  return null; // pending
+  return null; // pending or cancelled
 }
 
 /** A timestamp suitable for a default file name. */
@@ -111,15 +117,8 @@ export function MultiTargetPane({ tabId }: MultiTargetPaneProps) {
   const confirmResolver = useRef<((ok: boolean) => void) | null>(null);
   const runInFlight = useRef(false);
 
-  // Auto-follow the progress list as targets complete, unless the user has
-  // scrolled up to read earlier rows (then leave their position alone).
-  const progressRef = useRef<HTMLDivElement | null>(null);
+  // Re-follow the progress list from the top of each run (see ProgressList).
   const stickToBottom = useRef(true);
-  const progressCount = view?.progress.length ?? 0;
-  useEffect(() => {
-    const el = progressRef.current;
-    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [progressCount]);
 
   // Status filter for the progress list (empty set = show everything).
   const [progressFilters, setProgressFilters] = useState<Set<ProgressCategory>>(
@@ -260,7 +259,16 @@ export function MultiTargetPane({ tabId }: MultiTargetPaneProps) {
   }
 
   // ── Run (execute / results) ─────────────────────────────────────────────────
-  function handleEvent(ev: MultiEvent, mode: MultiMode) {
+  // Per-target progress goes through `buffer` (coalesced, flushed ~10×/sec)
+  // rather than straight into the store: a run across thousands of databases
+  // emits thousands of events, and a store patch per event re-rendered the
+  // pane per event, freezing the app. Lifecycle events flush first so the
+  // list is complete/consistent when the status changes.
+  function handleEvent(
+    ev: MultiEvent,
+    mode: MultiMode,
+    buffer: ProgressBuffer,
+  ) {
     const store = useMultiTargetStore.getState();
     const ed = useEditorStore.getState();
     switch (ev.kind) {
@@ -269,7 +277,14 @@ export function MultiTargetPane({ tabId }: MultiTargetPaneProps) {
         if (mode === "results") ed.resultStarted(tabId, ev.runId);
         break;
       case "target":
-        store.markPending(tabId, ev.connectionId, ev.server, ev.database);
+        buffer.push({
+          connectionId: ev.connectionId,
+          server: ev.server,
+          database: ev.database,
+          status: "pending",
+          rows: null,
+          error: null,
+        });
         break;
       case "meta":
         ed.resultMeta(tabId, 0, ev.columns);
@@ -278,22 +293,32 @@ export function MultiTargetPane({ tabId }: MultiTargetPaneProps) {
         ed.resultAppendRows(tabId, 0, ev.rows);
         break;
       case "targetDone":
-        store.markDone(
-          tabId,
-          ev.connectionId,
-          ev.server,
-          ev.database,
-          ev.rows,
-          ev.error,
-        );
+        buffer.push({
+          connectionId: ev.connectionId,
+          server: ev.server,
+          database: ev.database,
+          status: ev.error ? "error" : "ok",
+          rows: ev.rows,
+          error: ev.error,
+        });
         break;
       case "serverError":
-        store.markServerError(tabId, ev.connectionId, ev.server, ev.error);
+        // A server-level failure: empty database marks the whole-server row.
+        buffer.push({
+          connectionId: ev.connectionId,
+          server: ev.server,
+          database: "",
+          status: "error",
+          rows: null,
+          error: ev.error,
+        });
         break;
       case "paused":
+        buffer.flush();
         store.pauseRun(tabId, ev.failed, ev.total);
         break;
       case "finished":
+        buffer.flush();
         store.finishRun(tabId, ev.succeeded, ev.failed, ev.rowsTotal);
         if (mode === "results")
           ed.resultFinished(
@@ -308,6 +333,7 @@ export function MultiTargetPane({ tabId }: MultiTargetPaneProps) {
           );
         break;
       case "cancelled":
+        buffer.flush();
         store.cancelRun(tabId);
         if (mode === "results") ed.resultCancelled(tabId);
         break;
@@ -353,7 +379,8 @@ export function MultiTargetPane({ tabId }: MultiTargetPaneProps) {
       useMultiTargetStore.getState().startRun(tabId, mode, total, "");
       if (mode === "results") useEditorStore.getState().resetResult(tabId);
 
-      const channel = createMultiChannel((ev) => handleEvent(ev, mode));
+      const buffer = createProgressBuffer(tabId);
+      const channel = createMultiChannel((ev) => handleEvent(ev, mode, buffer));
       try {
         const { runId } = await multiTargetRun(
           targets,
@@ -408,7 +435,8 @@ export function MultiTargetPane({ tabId }: MultiTargetPaneProps) {
     else if (cat === "error") errCount += 1;
   }
   const completed = view.progress.filter(
-    (p) => p.database !== "" && p.status !== "pending",
+    (p) =>
+      p.database !== "" && p.status !== "pending" && p.status !== "cancelled",
   ).length;
   const pct =
     view.runStatus === "done"
@@ -749,59 +777,11 @@ export function MultiTargetPane({ tabId }: MultiTargetPaneProps) {
                 Failed {errCount}
               </button>
             </div>
-            <div
-              className={styles.targetList}
-              ref={progressRef}
-              onScroll={() => {
-                const el = progressRef.current;
-                if (el) {
-                  // Keep following only while pinned near the bottom (~24px).
-                  stickToBottom.current =
-                    el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-                }
-              }}
-            >
-              {visibleProgress.length === 0 && (
-                <div className={styles.placeholderRow}>
-                  No matching targets.
-                </div>
-              )}
-              {visibleProgress.map((p) => {
-                // Flag a database where the executed DML changed nothing.
-                const zeroAffected =
-                  execute && p.status === "ok" && p.rows === 0;
-                return (
-                  <div
-                    key={`${p.connectionId} ${p.database}`}
-                    className={styles.targetRow}
-                    data-status={p.status}
-                    data-zero={zeroAffected ? "true" : undefined}
-                  >
-                    <span className={styles.targetIcon}>
-                      {p.status === "ok" ? (
-                        <CheckIcon />
-                      ) : p.status === "error" ? (
-                        <ErrorIcon />
-                      ) : (
-                        <span className="spinner" aria-hidden />
-                      )}
-                    </span>
-                    <span className={styles.targetName}>
-                      {p.server}
-                      {p.database ? ` › ${p.database}` : " › (server)"}
-                    </span>
-                    {p.rows != null && (
-                      <span className={styles.muted}>
-                        {p.rows} {execute ? "affected" : "rows"}
-                      </span>
-                    )}
-                    {p.error && (
-                      <span className={styles.targetError}>{p.error}</span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+            <ProgressList
+              rows={visibleProgress}
+              execute={execute}
+              stickToBottom={stickToBottom}
+            />
           </section>
         )}
 
@@ -894,6 +874,110 @@ export function MultiTargetPane({ tabId }: MultiTargetPaneProps) {
             ))}
         </div>
       </Modal>
+    </div>
+  );
+}
+
+/** Fixed progress-row height (px) — must match `.targetRow` in the CSS. */
+const PROGRESS_ROW_HEIGHT = 24;
+
+/**
+ * The per-target progress list, virtualized: a run can span thousands of
+ * databases, and rendering a DOM row per target made every store flush do
+ * O(targets) DOM work (the original "app freezes during a big run" bug —
+ * together with the event coalescing in `createProgressBuffer`). Only the
+ * ~10 visible rows exist in the DOM; rows are fixed-height for cheap math.
+ *
+ * Auto-follows the newest rows unless the user scrolled up to read earlier
+ * ones (`stickToBottom` lives in the parent so a new run can re-arm it).
+ */
+function ProgressList({
+  rows,
+  execute,
+  stickToBottom,
+}: {
+  rows: TargetProgress[];
+  execute: boolean;
+  stickToBottom: React.MutableRefObject<boolean>;
+}) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => PROGRESS_ROW_HEIGHT,
+    overscan: 12,
+  });
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
+  }, [rows.length, stickToBottom]);
+
+  return (
+    <div
+      className={styles.targetList}
+      ref={scrollRef}
+      onScroll={() => {
+        const el = scrollRef.current;
+        if (el) {
+          // Keep following only while pinned near the bottom (~one row).
+          stickToBottom.current =
+            el.scrollHeight - el.scrollTop - el.clientHeight <
+            PROGRESS_ROW_HEIGHT;
+        }
+      }}
+    >
+      {rows.length === 0 ? (
+        <div className={styles.placeholderRow}>No matching targets.</div>
+      ) : (
+        <div
+          className={styles.targetCanvas}
+          style={{ height: virtualizer.getTotalSize() }}
+        >
+          {virtualizer.getVirtualItems().map((v) => {
+            const p = rows[v.index];
+            // Flag a database where the executed DML changed nothing.
+            const zeroAffected = execute && p.status === "ok" && p.rows === 0;
+            return (
+              <div
+                key={`${p.connectionId} ${p.database}`}
+                className={styles.targetRow}
+                data-status={p.status}
+                data-zero={zeroAffected ? "true" : undefined}
+                style={{ transform: `translateY(${v.start}px)` }}
+              >
+                <span className={styles.targetIcon}>
+                  {p.status === "ok" ? (
+                    <CheckIcon />
+                  ) : p.status === "error" ? (
+                    <ErrorIcon />
+                  ) : p.status === "cancelled" ? (
+                    <CloseIcon />
+                  ) : (
+                    <span className="spinner" aria-hidden />
+                  )}
+                </span>
+                <span className={styles.targetName}>
+                  {p.server}
+                  {p.database ? ` › ${p.database}` : " › (server)"}
+                </span>
+                {p.rows != null && (
+                  <span className={styles.muted}>
+                    {p.rows} {execute ? "affected" : "rows"}
+                  </span>
+                )}
+                {p.error && (
+                  // Single line (fixed row height); full text on hover.
+                  <span className={styles.targetError} title={p.error}>
+                    {p.error}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -1029,7 +1113,7 @@ function MiniSqlEditor({
   const fontSize = useSettingsStore((s) => s.editor.fontSize);
   const extensions = useMemo(
     () => [
-      sql({ dialect: MSSQL }),
+      sql({ dialect: MSSQLDialect }),
       keepIndentOnEnter,
       EditorView.lineWrapping,
       EditorView.theme({

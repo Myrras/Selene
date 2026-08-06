@@ -18,6 +18,7 @@ import { useConnections, useSchemaTables } from "../lib/queries";
 import { makeSchemaCompletionSource } from "../lib/sqlCompletion";
 import { connectTabToConnection } from "../lib/tabSession";
 import { getTab, useEditorStore } from "../state/editorStore";
+import { useLayoutStore } from "../state/layoutStore";
 import { selectSession, useSessionStore } from "../state/sessionStore";
 import { useSettingsStore } from "../state/settingsStore";
 import { toastError } from "../state/toastStore";
@@ -119,8 +120,11 @@ export function EditorPane({ tabId }: EditorPaneProps) {
   // editor on the macOS WebView (WebKit ignores `preventScroll`).
   const editorViewRef = useRef<EditorView | null>(null);
 
-  // Editor/results split (percentage of height for the editor).
-  const [editorPct, setEditorPct] = useState(42);
+  // Editor/results split (percentage of height for the editor). Lives in the
+  // persisted layout store, not local state: App remounts this pane per tab
+  // (`key={activeTabId}`), so a local value would reset on every tab switch.
+  const editorPct = useLayoutStore((s) => s.editorPct);
+  const setEditorPct = useLayoutStore((s) => s.setEditorPct);
   const splitRef = useRef<HTMLDivElement>(null);
 
   const isRunning = status === "running";
@@ -213,8 +217,8 @@ export function EditorPane({ tabId }: EditorPaneProps) {
     if (!container) return;
     const rect = container.getBoundingClientRect();
     function onMove(ev: MouseEvent) {
-      const pct = ((ev.clientY - rect.top) / rect.height) * 100;
-      setEditorPct(Math.min(80, Math.max(15, pct)));
+      // The store clamps to a sane range.
+      setEditorPct(((ev.clientY - rect.top) / rect.height) * 100);
     }
     function onUp() {
       window.removeEventListener("mousemove", onMove);

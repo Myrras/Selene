@@ -41,9 +41,10 @@ const COLUMN_SAMPLE: usize = 100;
 
 /// Stream a `find`/`aggregate` cursor into `sink`, deriving columns by sampling.
 ///
-/// `cancel` is honoured cooperatively at every batch boundary (and once before
-/// the first read). `opts.max_rows` caps the delivered rows; when the cursor
-/// still had documents past the cap the outcome is marked `truncated`.
+/// Every cursor pull is raced against `cancel` ([`CancelToken::bound`]), so a
+/// cancel interrupts even a cursor the server has not answered yet.
+/// `opts.max_rows` caps the delivered rows; when the cursor still had documents
+/// past the cap the outcome is marked `truncated`.
 pub(crate) async fn stream_cursor(
     mut cursor: Cursor<Document>,
     opts: &ExecOptions,
@@ -66,15 +67,18 @@ pub(crate) async fn stream_cursor(
     let mut cursor_done = false;
 
     loop {
-        if cancel.is_cancelled() {
-            return Err(CoreError::Cancelled);
-        }
         // Stop sampling once we've hit the sample cap or the row cap.
         let cap = sample_cap(opts.max_rows);
         if sample.len() >= cap {
             break;
         }
-        match cursor.try_next().await.map_err(map_mongo_err)? {
+        // Raced against the token so a cancel interrupts a cursor the server
+        // has not answered yet (same for the two pulls in phase 3 below).
+        match cancel
+            .bound(cursor.try_next())
+            .await?
+            .map_err(map_mongo_err)?
+        {
             Some(doc) => sample.push(doc),
             None => {
                 cursor_done = true;
@@ -127,23 +131,28 @@ pub(crate) async fn stream_cursor(
     // --- Phase 3: stream the remainder past the sample. --------------------
     if !sink_stopped && !cursor_done {
         loop {
-            if cancel.is_cancelled() {
-                return Err(CoreError::Cancelled);
-            }
-
             // Enforce the row cap *before* accepting the next document: if we've
             // already delivered `max` rows and the cursor still yields one, the
             // source had more than the cap — flush the tail, mark truncated, stop.
             if opts.max_rows.is_some_and(|max| total_rows >= max) {
                 // Peek one more document to decide truncation. If there is one,
                 // the result was genuinely truncated; if not, it fit exactly.
-                if cursor.try_next().await.map_err(map_mongo_err)?.is_some() {
+                if cancel
+                    .bound(cursor.try_next())
+                    .await?
+                    .map_err(map_mongo_err)?
+                    .is_some()
+                {
                     truncated = true;
                 }
                 break;
             }
 
-            match cursor.try_next().await.map_err(map_mongo_err)? {
+            match cancel
+                .bound(cursor.try_next())
+                .await?
+                .map_err(map_mongo_err)?
+            {
                 Some(doc) => {
                     batch.push(row_for(&doc, &columns));
                     total_rows += 1;

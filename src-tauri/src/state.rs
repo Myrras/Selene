@@ -219,11 +219,9 @@ impl ConnectionStore {
 ///
 /// `driver`, `caps`, and `connection_id` are snapshotted at connect time and
 /// returned to the frontend via [`SessionInfo`](crate::commands::session::SessionInfo).
-/// `driver` is read by `query_run` to pick the safety guard; `caps` and
-/// `connection_id` are retained for diagnostics and for forthcoming
-/// session-scoped commands (e.g. a reconnect that re-reads the originating spec,
-/// or capability-gated behaviour) — hence `#[allow(dead_code)]` on those two
-/// rather than dropping them from the documented session model.
+/// `driver` is read by `query_run` to pick the safety guard; `caps` is retained
+/// for diagnostics and capability-gated behaviour — hence `#[allow(dead_code)]`
+/// rather than dropping it from the documented session model.
 pub struct SessionEntry {
     /// Which backend this session is connected to. Read by `query_run` to select
     /// the safety guard (SQL vs. MongoDB) for server-side enforcement.
@@ -232,12 +230,19 @@ pub struct SessionEntry {
     #[allow(dead_code)]
     pub caps: DriverCapabilities,
     /// The saved connection this session was opened from, so the session can be
-    /// matched back to its config (reconnect, diagnostics).
-    #[allow(dead_code)]
+    /// matched back to its config (the reconnect after a cancelled query,
+    /// diagnostics).
     pub connection_id: String,
     /// Cached read-only flag from the connection spec at connect time, so the
     /// SQL guard can be enforced without re-reading the store on every query.
     pub read_only: bool,
+    /// Last known active database, tracked so the reconnect after a cancelled
+    /// query can restore the session's context (a fresh connection starts at
+    /// the spec's default database). Seeded from the spec at connect time and
+    /// updated by `session_use_database` / `session_current_database` (the
+    /// latter is called by the frontend after every finished query, which also
+    /// picks up `USE` statements inside batches).
+    pub current_database: Option<String>,
     /// The live connection. Guarded so it is driven from one task at a time.
     pub conn: Box<dyn Connection>,
 }

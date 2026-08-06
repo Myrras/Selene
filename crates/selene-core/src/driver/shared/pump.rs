@@ -27,8 +27,9 @@
 //!   "<n> rows affected" rather than nothing.
 //!
 //! ## Cancellation & row cap
-//! Cancellation is cooperative: [`CancelToken::is_cancelled`] is checked at every
-//! stream-item boundary and a tripped token returns [`CoreError::Cancelled`].
+//! Every pull of the next stream item is raced against the [`CancelToken`]
+//! ([`CancelToken::bound`]), so a tripped token returns [`CoreError::Cancelled`]
+//! even while the backend has not produced a row yet.
 //! `opts.max_rows` caps the total rows across all sets; hitting it flushes the
 //! current batch, marks the outcome `truncated`, and stops. A [`Flow::Stop`]
 //! from the sink ends the stream promptly (not treated as truncation).
@@ -92,11 +93,9 @@ where
     let mut sink_stop = false;
 
     loop {
-        if cancel.is_cancelled() {
-            return Err(CoreError::Cancelled);
-        }
-
-        let item = match stream.try_next().await.map_err(&map_err)? {
+        // Race the next item against the token so a cancel interrupts a query
+        // the server has not answered yet, not just batch boundaries.
+        let item = match cancel.bound(stream.try_next()).await?.map_err(&map_err)? {
             Some(item) => item,
             None => break, // stream exhausted
         };
@@ -342,6 +341,32 @@ mod tests {
         )
         .await
         .expect_err("cancelled before first poll");
+        assert!(matches!(err, CoreError::Cancelled));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cancel_interrupts_a_stream_that_never_yields() {
+        // A backend that hasn't answered yet parks the pump in `try_next()`;
+        // the awaitable token must wake it and return `Cancelled`.
+        let mut sink = RecordingSink::default();
+        let cancel = CancelToken::new();
+        let canceller = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            canceller.cancel();
+        });
+        let err = pump(
+            stream::pending::<Item>(),
+            &ExecOptions::default(),
+            &mut sink,
+            &cancel,
+            |r: &FakeRow| r.columns.clone(),
+            |r: &FakeRow| r.cells.clone(),
+            |q: &FakeQr| q.affected,
+            |_e: sqlx::Error| CoreError::Protocol("x".into()),
+        )
+        .await
+        .expect_err("woken by cancel");
         assert!(matches!(err, CoreError::Cancelled));
     }
 

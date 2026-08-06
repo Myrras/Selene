@@ -1,16 +1,35 @@
 /**
  * Multi-target store — the run-lifecycle reducers the MultiEvent channel drives
- * (started → target/targetDone/serverError → finished), plus selection helpers.
+ * (started → target/targetDone/serverError → finished), plus selection helpers
+ * and the event-coalescing progress buffer.
  */
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useMultiTargetStore } from "./multiTargetStore";
+import {
+  createProgressBuffer,
+  PROGRESS_FLUSH_MS,
+  useMultiTargetStore,
+} from "./multiTargetStore";
+import type { TargetProgress } from "./multiTargetStore";
 
 const TAB = "tab-1";
 
 function view() {
   return useMultiTargetStore.getState().views[TAB];
+}
+
+/** A progress row with defaults, for terse test bodies. */
+function row(patch: Partial<TargetProgress>): TargetProgress {
+  return {
+    connectionId: "c1",
+    server: "srv",
+    database: "db1",
+    status: "pending",
+    rows: null,
+    error: null,
+    ...patch,
+  };
 }
 
 beforeEach(() => {
@@ -43,7 +62,8 @@ describe("multiTargetStore", () => {
 
   it("startRun resets progress and marks running", () => {
     const s = useMultiTargetStore.getState();
-    s.markDone(TAB, "c1", "srv", "db", 1, null); // stale row from a prior run
+    // Stale row from a prior run.
+    s.applyProgress(TAB, [row({ database: "db", status: "ok", rows: 1 })]);
     s.startRun(TAB, "results", 3, "run-1");
     expect(view().runStatus).toBe("running");
     expect(view().runMode).toBe("results");
@@ -52,30 +72,36 @@ describe("multiTargetStore", () => {
     expect(view().progress).toEqual([]);
   });
 
-  it("markPending then markDone upserts the same (server, db) row", () => {
+  it("applyProgress upserts by (connection, db) and appends new keys", () => {
     const s = useMultiTargetStore.getState();
-    s.startRun(TAB, "results", 1, "run-1");
-    s.markPending(TAB, "c1", "srv", "db1");
-    expect(view().progress).toHaveLength(1);
+    s.startRun(TAB, "results", 2, "run-1");
+    s.applyProgress(TAB, [row({}), row({ database: "db2" })]);
+    expect(view().progress).toHaveLength(2);
     expect(view().progress[0].status).toBe("pending");
-    s.markDone(TAB, "c1", "srv", "db1", 7, null);
-    expect(view().progress).toHaveLength(1); // upsert, not append
-    expect(view().progress[0].status).toBe("ok");
-    expect(view().progress[0].rows).toBe(7);
+    // Same key updates in place (keeps arrival order); new key appends.
+    s.applyProgress(TAB, [
+      row({ status: "ok", rows: 7 }),
+      row({ database: "db3", status: "error", error: "boom" }),
+    ]);
+    expect(view().progress).toHaveLength(3);
+    expect(view().progress[0]).toMatchObject({
+      database: "db1",
+      status: "ok",
+      rows: 7,
+    });
+    expect(view().progress[2]).toMatchObject({
+      database: "db3",
+      status: "error",
+      error: "boom",
+    });
   });
 
-  it("markDone with an error marks the row errored", () => {
-    const s = useMultiTargetStore.getState();
-    s.startRun(TAB, "execute", 1, "run-1");
-    s.markDone(TAB, "c1", "srv", "db1", null, "boom");
-    expect(view().progress[0].status).toBe("error");
-    expect(view().progress[0].error).toBe("boom");
-  });
-
-  it("markServerError records a server-level row (empty database)", () => {
+  it("applyProgress records a server-level row (empty database)", () => {
     const s = useMultiTargetStore.getState();
     s.startRun(TAB, "execute", 2, "run-1");
-    s.markServerError(TAB, "c1", "srv", "no stored password");
+    s.applyProgress(TAB, [
+      row({ database: "", status: "error", error: "no stored password" }),
+    ]);
     expect(view().progress[0].database).toBe("");
     expect(view().progress[0].status).toBe("error");
   });
@@ -114,6 +140,24 @@ describe("multiTargetStore", () => {
     expect(view().runId).toBeNull();
   });
 
+  it("cancelRun flips still-pending rows to cancelled, keeps finished ones", () => {
+    const s = useMultiTargetStore.getState();
+    s.startRun(TAB, "execute", 3, "run-1");
+    s.applyProgress(TAB, [
+      row({ status: "ok", rows: 5 }),
+      row({ database: "db2" }),
+      row({ database: "db3" }),
+    ]);
+    s.cancelRun(TAB);
+    expect(view().runStatus).toBe("cancelled");
+    expect(view().runId).toBeNull();
+    expect(view().progress.map((p) => p.status)).toEqual([
+      "ok",
+      "cancelled",
+      "cancelled",
+    ]);
+  });
+
   it("remove drops the view (tab close)", () => {
     useMultiTargetStore.getState().remove(TAB);
     expect(view()).toBeUndefined();
@@ -124,5 +168,43 @@ describe("multiTargetStore", () => {
     // Must not throw or resurrect the view.
     useMultiTargetStore.getState().finishRun(TAB, 1, 0, 0);
     expect(view()).toBeUndefined();
+  });
+});
+
+describe("createProgressBuffer", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("coalesces pushes into one deferred store flush", () => {
+    const buf = createProgressBuffer(TAB);
+    buf.push(row({}));
+    buf.push(row({ database: "db2" }));
+    // Same key again before the flush: the later row wins (pending → done).
+    buf.push(row({ status: "ok", rows: 3 }));
+    expect(view().progress).toEqual([]); // nothing applied yet
+    vi.advanceTimersByTime(PROGRESS_FLUSH_MS);
+    expect(view().progress).toHaveLength(2);
+    expect(view().progress[0]).toMatchObject({ database: "db1", rows: 3 });
+  });
+
+  it("flush applies immediately and disarms the timer", () => {
+    const buf = createProgressBuffer(TAB);
+    buf.push(row({}));
+    buf.flush();
+    expect(view().progress).toHaveLength(1);
+    // The pending timer was cancelled; nothing double-applies later.
+    const after = view().progress;
+    vi.advanceTimersByTime(PROGRESS_FLUSH_MS * 2);
+    expect(view().progress).toBe(after);
+  });
+
+  it("flush with an empty buffer is a no-op", () => {
+    const before = view();
+    createProgressBuffer(TAB).flush();
+    expect(view()).toBe(before);
   });
 });

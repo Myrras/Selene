@@ -594,6 +594,138 @@ async fn use_prefixed_rollback_dml_switches_db_and_reports_counts() {
     exec_ok(conn, "DROP DATABASE selene_use_it").await;
 }
 
+/// `SELECT … INTO <permanent table>` returns no result set (the rows land in
+/// the new table), so it must route through the affected-count path and report
+/// "<n> rows affected" — not "no result set".
+#[tokio::test]
+#[ignore = "requires Docker; run with --ignored"]
+async fn select_into_reports_affected_count() {
+    let mut fixture = start_mssql().await;
+    let conn = fixture.conn.as_mut();
+
+    exec_ok(conn, "CREATE TABLE dbo.src (id int NOT NULL PRIMARY KEY)").await;
+    exec_ok(conn, "INSERT INTO dbo.src (id) VALUES (1), (2), (3)").await;
+
+    let (outcome, sink) = run(
+        conn,
+        "SELECT id INTO dbo.src_backup FROM dbo.src WHERE id IN (SELECT id FROM dbo.src WHERE id <= 2)",
+        &ExecOptions::default(),
+    )
+    .await;
+
+    assert_eq!(outcome.result_sets, 1, "one affected-count set");
+    assert_eq!(outcome.total_rows, 0);
+    let sets = sink.sets();
+    assert!(sets[0].columns.is_empty(), "count set has no columns");
+    assert_eq!(sets[0].affected, vec![Some(2)]);
+
+    // The table was really created and filled.
+    let (_o, check) = run(
+        conn,
+        "SELECT COUNT(*) AS n FROM dbo.src_backup",
+        &ExecOptions::default(),
+    )
+    .await;
+    assert_eq!(check.sets()[0].rows, vec![vec![CellValue::I64(2)]]);
+}
+
+/// `INSERT … SELECT` inside a semicolon-free transaction wrapper must report
+/// its affected count (not "no result set") — for both a `ROLLBACK` dry-run
+/// and a real `COMMIT`.
+#[tokio::test]
+#[ignore = "requires Docker; run with --ignored"]
+async fn insert_select_in_transaction_reports_count() {
+    let mut fixture = start_mssql().await;
+    let conn = fixture.conn.as_mut();
+
+    exec_ok(
+        conn,
+        "CREATE TABLE dbo.evt (id int NOT NULL PRIMARY KEY, action int NOT NULL, note nvarchar(50) NOT NULL)",
+    )
+    .await;
+    exec_ok(conn, "CREATE TABLE dbo.d (id int NOT NULL PRIMARY KEY)").await;
+    exec_ok(conn, "INSERT INTO dbo.d (id) VALUES (1), (2), (3)").await;
+
+    // Dry-run: rolled back, count still reported, nothing persisted.
+    let sql_rollback = "BEGIN TRANSACTION\n\
+        INSERT INTO dbo.evt (id, action, note)\n\
+        SELECT d.id, 47, N'converted'\n\
+        FROM dbo.d\n\
+        WHERE d.id IN (SELECT id FROM dbo.d WHERE id <= 2)\n\
+        ROLLBACK";
+    let (outcome, sink) = run(conn, sql_rollback, &ExecOptions::default()).await;
+    assert_eq!(outcome.result_sets, 1);
+    assert!(outcome.rolled_back, "ROLLBACK wrapper is a dry-run");
+    assert_eq!(sink.sets()[0].affected, vec![Some(2)]);
+
+    let (_o, check) = run(
+        conn,
+        "SELECT COUNT(*) AS n FROM dbo.evt",
+        &ExecOptions::default(),
+    )
+    .await;
+    assert_eq!(check.sets()[0].rows, vec![vec![CellValue::I64(0)]]);
+
+    // Committed: count reported and the rows persist.
+    let sql_commit = sql_rollback.replace("ROLLBACK", "COMMIT");
+    let (outcome, sink) = run(conn, &sql_commit, &ExecOptions::default()).await;
+    assert_eq!(outcome.result_sets, 1);
+    assert!(!outcome.rolled_back, "COMMIT wrapper is not a dry-run");
+    assert_eq!(sink.sets()[0].affected, vec![Some(2)]);
+
+    let (_o, check) = run(
+        conn,
+        "SELECT COUNT(*) AS n FROM dbo.evt",
+        &ExecOptions::default(),
+    )
+    .await;
+    assert_eq!(check.sets()[0].rows, vec![vec![CellValue::I64(2)]]);
+}
+
+/// A trigger's own DML emits extra count-flagged DONE tokens *before* the
+/// triggering statement's count. For a single-statement batch only the
+/// statement's own (last) count must surface — one set, not three.
+#[tokio::test]
+#[ignore = "requires Docker; run with --ignored"]
+async fn update_with_trigger_reports_only_its_own_count() {
+    let mut fixture = start_mssql().await;
+    let conn = fixture.conn.as_mut();
+
+    exec_ok(
+        conn,
+        "CREATE TABLE dbo.acc (id int NOT NULL PRIMARY KEY, advisor int NULL)",
+    )
+    .await;
+    exec_ok(conn, "CREATE TABLE dbo.audit (id int NULL)").await;
+    // Two DML statements in the trigger → two extra counts ahead of the
+    // UPDATE's own (the [0, 0, n] shape from the bug report).
+    exec_ok(
+        conn,
+        "CREATE TRIGGER dbo.acc_upd ON dbo.acc AFTER UPDATE AS\n\
+         BEGIN\n\
+           UPDATE dbo.audit SET id = id WHERE 1 = 0;\n\
+           INSERT INTO dbo.audit (id) SELECT id FROM inserted WHERE 1 = 0;\n\
+         END",
+    )
+    .await;
+    exec_ok(conn, "INSERT INTO dbo.acc (id) VALUES (1), (2), (3)").await;
+
+    let (outcome, sink) = run(
+        conn,
+        "UPDATE dbo.acc SET advisor = 276371 WHERE id IN (SELECT id FROM dbo.acc WHERE id <= 2)",
+        &ExecOptions::default(),
+    )
+    .await;
+
+    assert_eq!(
+        outcome.result_sets, 1,
+        "trigger counts must be collapsed into the statement's own count"
+    );
+    let sets = sink.sets();
+    assert_eq!(sets.len(), 1);
+    assert_eq!(sets[0].affected, vec![Some(2)], "the UPDATE's own count");
+}
+
 // ---------------------------------------------------------------------------
 // 4. max_rows truncation
 // ---------------------------------------------------------------------------
@@ -733,6 +865,49 @@ async fn cooperative_cancellation_stops_mid_stream() {
         delivered > 0 && delivered < 1500,
         "cancellation should deliver some but not all rows; got {delivered}"
     );
+}
+
+#[tokio::test]
+#[ignore = "requires Docker; run with --ignored"]
+async fn cancel_interrupts_a_server_side_wait() {
+    // Regression for "the cancel button does nothing": a batch the server has
+    // not answered yet (here parked in WAITFOR DELAY) never reaches a batch
+    // boundary, so a flag-only token was never observed. The awaitable token
+    // must interrupt the blocking await promptly.
+    let mut fixture = start_mssql().await;
+    let conn = fixture.conn.as_mut();
+
+    let cancel = CancelToken::new();
+    let canceller = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        canceller.cancel();
+    });
+
+    let mut sink = CollectingSink::new();
+    let started = std::time::Instant::now();
+    let err = conn
+        .execute(
+            "WAITFOR DELAY '00:00:20'; SELECT 1 AS one",
+            &ExecOptions::default(),
+            &mut sink,
+            &cancel,
+        )
+        .await
+        .expect_err("a cancelled execution returns Err");
+
+    assert!(
+        matches!(err, CoreError::Cancelled),
+        "expected CoreError::Cancelled, got {err:?}"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "cancel must interrupt the server-side wait promptly, took {:?}",
+        started.elapsed()
+    );
+    // NB: the connection is intentionally not reused after this — the abandoned
+    // TDS conversation leaves its protocol state undefined (the app layer
+    // replaces the connection after a cancel).
 }
 
 // ---------------------------------------------------------------------------

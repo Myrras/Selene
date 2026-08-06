@@ -10,15 +10,17 @@
 //! `on_set_end` whenever the set changes or the stream ends.
 //!
 //! ## Cancellation semantics
-//! Cancellation is **cooperative**: we check [`CancelToken::is_cancelled`] at
-//! every batch boundary (and before the first poll). On cancellation we stop
-//! polling immediately and return [`CoreError::Cancelled`]. Dropping the
-//! `QueryStream` (which happens as this function returns) releases tiberius'
-//! borrow of the connection; the Tauri layer's hard task-abort then drops the
-//! whole connection, which raises a server-side Attention to actually stop a
-//! long-running query. Returning `Cancelled` (rather than a partial `Ok`) keeps
-//! the contract unambiguous: a cancelled execution did not "succeed", and the
-//! rows already delivered to the sink remain valid for display.
+//! Every blocking await (submitting the batch, pulling the next stream item) is
+//! raced against the [`CancelToken`] via [`CancelToken::bound`], so a cancel
+//! interrupts the query even while the server has not produced a single row yet
+//! (long aggregate, blocked on a lock) — not just at batch boundaries. On
+//! cancellation we return [`CoreError::Cancelled`] with the TDS conversation
+//! abandoned mid-stream; the connection's protocol state is then undefined, and
+//! the Tauri layer replaces the session's connection (closing the socket, which
+//! makes the server abort the in-flight batch). Returning `Cancelled` (rather
+//! than a partial `Ok`) keeps the contract unambiguous: a cancelled execution
+//! did not "succeed", and the rows already delivered to the sink remain valid
+//! for display.
 //!
 //! ## Row cap
 //! `opts.max_rows` caps the total rows delivered across all sets. When the cap
@@ -54,12 +56,12 @@ pub(crate) async fn run_query(
     sink: &mut dyn RowSink,
     cancel: &CancelToken,
 ) -> Result<ExecOutcome, CoreError> {
-    // Bail out before doing any work if cancellation already fired.
-    if cancel.is_cancelled() {
-        return Err(CoreError::Cancelled);
-    }
-
-    let stream = client.simple_query(sql).await.map_err(map_tiberius_err)?;
+    // Submitting the batch already blocks until the server starts answering, so
+    // race it against the token too (this also covers a pre-cancelled token).
+    let stream = cancel
+        .bound(client.simple_query(sql))
+        .await?
+        .map_err(map_tiberius_err)?;
 
     pump(stream, opts, sink, cancel).await
 }
@@ -84,18 +86,16 @@ pub(crate) async fn run_exec_counting(
     sink: &mut dyn RowSink,
     cancel: &CancelToken,
 ) -> Result<ExecOutcome, CoreError> {
-    // Cancellation is best-effort on this path: `execute()` is a single
-    // round-trip with no intra-statement yield point, so we honour a pre-fire
-    // cancel and otherwise rely on the Tauri layer's hard task-abort (which
-    // drops the connection) for a long-running DML — consistent with the
-    // documented v0.1 cooperative-cancellation model.
-    if cancel.is_cancelled() {
-        return Err(CoreError::Cancelled);
-    }
-
-    let result = client.execute(sql, &[]).await.map_err(map_tiberius_err)?;
+    // `execute()` is a single round-trip with no intra-statement yield point,
+    // so the whole await is raced against the token: a cancel interrupts even a
+    // long-running DML (the Tauri layer then replaces the abandoned connection).
+    let result = cancel
+        .bound(client.execute(sql, &[]))
+        .await?
+        .map_err(map_tiberius_err)?;
     let rolled_back = crate::guard::is_rollback_wrapped_dml_batch(sql);
     let counts = trim_wrapper_counts(sql, result.rows_affected());
+    let counts = collapse_trigger_counts(sql, counts);
 
     // One column-less set per statement, carrying its affected count. If the
     // server reported none (e.g. the batch contains `SET NOCOUNT ON`), still
@@ -149,12 +149,14 @@ where
     let mut sink_stop = false;
 
     loop {
-        // Cooperative cancellation check at every iteration boundary.
-        if cancel.is_cancelled() {
-            return Err(CoreError::Cancelled);
-        }
-
-        let item = match stream.try_next().await.map_err(map_tiberius_err)? {
+        // Race the next stream item against the token: this is where the pump
+        // parks while the server is still computing, so an unraced await here
+        // is exactly what made the cancel button a no-op on a silent query.
+        let item = match cancel
+            .bound(stream.try_next())
+            .await?
+            .map_err(map_tiberius_err)?
+        {
             Some(item) => item,
             None => break, // stream exhausted
         };
@@ -264,16 +266,17 @@ fn convert_row(row: tiberius::Row) -> Vec<CellValue> {
     row.into_iter().map(|cd| cell_to_value(&cd)).collect()
 }
 
-/// For a rollback-wrapped dry-run batch (`BEGIN TRAN; <DML …>; ROLLBACK`),
-/// strip the leading/trailing zero-count entries that `BEGIN TRAN` and
-/// `ROLLBACK` themselves contribute, so the UI shows only the inner DML's
-/// "<n> rows affected" set(s) instead of two phantom 0-row sets framing them.
+/// For a transaction-wrapped DML batch (`BEGIN TRAN; <DML …>; ROLLBACK |
+/// COMMIT`), strip the leading/trailing zero-count entries that `BEGIN TRAN`
+/// and `ROLLBACK`/`COMMIT` themselves contribute, so the UI shows only the
+/// inner DML's "<n> rows affected" set(s) instead of two phantom 0-row sets
+/// framing them.
 ///
 /// Only the first and last entries are candidates, and only when they are `0`
 /// — a genuine inner DML that affected 0 rows (which can also sit in the
 /// middle) is always preserved. For non-wrapped batches this is a no-op.
 fn trim_wrapper_counts<'a>(sql: &str, counts: &'a [u64]) -> &'a [u64] {
-    if !crate::guard::is_rollback_wrapped_dml_batch(sql) {
+    if !crate::guard::is_transaction_wrapped_dml_batch(sql) {
         return counts;
     }
     let mut start = 0;
@@ -285,6 +288,22 @@ fn trim_wrapper_counts<'a>(sql: &str, counts: &'a [u64]) -> &'a [u64] {
         end -= 1;
     }
     &counts[start..end]
+}
+
+/// A single DML statement produces exactly one affected count of its own; any
+/// extra count-flagged DONE tokens come from server-side triggers or cascades,
+/// whose counts arrive *before* the statement's own final count. For a batch
+/// with exactly one DML statement, keep only that last count so the UI shows
+/// one "<n> rows affected" set for the statement the user ran.
+///
+// ponytail: multi-statement batches keep all counts — without a SQL parser the
+// extras cannot be attributed to a statement; upgrade if that ever matters.
+fn collapse_trigger_counts<'a>(sql: &str, counts: &'a [u64]) -> &'a [u64] {
+    if counts.len() > 1 && crate::guard::is_single_dml_batch(sql) {
+        &counts[counts.len() - 1..]
+    } else {
+        counts
+    }
 }
 
 /// Flush the buffered batch (if any) to the sink, clearing it. Returns the
@@ -376,6 +395,28 @@ mod tests {
         let err = pump(empty_stream(), &opts, &mut sink, &cancel)
             .await
             .expect_err("cancelled before first poll");
+        assert!(matches!(err, CoreError::Cancelled));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cancel_interrupts_a_stream_that_never_yields() {
+        // The reported bug: a query the server has not answered yet parks the
+        // pump inside `try_next().await`, where a flag-only token was never
+        // observed. The awaitable token must wake it and return `Cancelled`.
+        let mut sink = RecordingSink::default();
+        let opts = ExecOptions::default();
+        let cancel = CancelToken::new();
+
+        let canceller = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            canceller.cancel();
+        });
+
+        let silent = stream::pending::<Result<QueryItem, tiberius::error::Error>>();
+        let err = pump(Box::pin(silent), &opts, &mut sink, &cancel)
+            .await
+            .expect_err("woken by cancel");
         assert!(matches!(err, CoreError::Cancelled));
     }
 
@@ -473,5 +514,44 @@ mod tests {
             &counts,
         );
         assert_eq!(trimmed, &[3, 0, 7]);
+    }
+
+    #[test]
+    fn trim_wrapper_counts_strips_commit_wrapper_zeros() {
+        // Committed wrapper: [BEGIN=0, INSERT=42, COMMIT=0] -> [42].
+        let counts = [0u64, 42, 0];
+        let trimmed = trim_wrapper_counts(
+            "BEGIN TRAN;\nINSERT INTO t (a) SELECT a FROM s;\nCOMMIT;",
+            &counts,
+        );
+        assert_eq!(trimmed, &[42]);
+    }
+
+    // --- collapse_trigger_counts ---------------------------------------------
+
+    #[test]
+    fn collapse_trigger_counts_keeps_only_the_statements_own_count() {
+        // Trigger/cascade counts precede the statement's own: [0, 0, 273].
+        let counts = [0u64, 0, 273];
+        let collapsed = collapse_trigger_counts(
+            "UPDATE t SET x = 1 WHERE id IN (SELECT id FROM u WHERE y = 2)",
+            &counts,
+        );
+        assert_eq!(collapsed, &[273]);
+    }
+
+    #[test]
+    fn collapse_trigger_counts_is_noop_for_multi_statement_batches() {
+        // Two statements → two counts; nothing can be attributed, keep all.
+        let counts = [5u64, 2];
+        let collapsed = collapse_trigger_counts("UPDATE a SET x = 1; DELETE FROM b", &counts);
+        assert_eq!(collapsed, &[5, 2]);
+    }
+
+    #[test]
+    fn collapse_trigger_counts_is_noop_for_single_count() {
+        let counts = [7u64];
+        let collapsed = collapse_trigger_counts("UPDATE t SET x = 1 WHERE id = 1", &counts);
+        assert_eq!(collapsed, &[7]);
     }
 }
