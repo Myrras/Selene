@@ -270,9 +270,10 @@ export function queryCancel(queryId: string): Promise<void> {
 // --- Export (streaming) ---------------------------------------------------
 
 /**
- * `export_result` -> run a query and write its first result set to `path`.
- * Progress arrives on `onProgress` (a `Channel<ExportEvent>`); the awaited
- * result is the final `ExportSummary`.
+ * `export_result` -> run a query and write one of its result sets to `path`.
+ * `setIndex` picks the set (defaults to the first). Progress arrives on
+ * `onProgress` (a `Channel<ExportEvent>`); the awaited result is the final
+ * `ExportSummary`.
  */
 export function exportResult(
   sessionId: string,
@@ -282,6 +283,7 @@ export function exportResult(
   maxRows: number | undefined,
   onProgress: Channel<ExportEvent>,
   csvOptions?: CsvOptions,
+  setIndex?: number,
 ): Promise<ExportSummary> {
   return invoke("export_result", {
     sessionId,
@@ -289,6 +291,7 @@ export function exportResult(
     format,
     path,
     maxRows,
+    setIndex,
     csvOptions,
     onProgress,
   });

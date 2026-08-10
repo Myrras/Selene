@@ -7,11 +7,12 @@
 //! grid uses — rows are written to disk batch-by-batch as they arrive, so a
 //! multi-million-row export never has to materialise in memory.
 //!
-//! ## v0.1 limitation: first result set only
+//! ## One result set per export
 //! A SQL batch can yield several result sets. A flat file (one CSV / one JSON
-//! array / one worksheet) has nowhere to put the 2nd, 3rd, … set, so this
-//! version exports **only the first result set (`set_index == 0`)** and
-//! silently ignores later ones. Multi-set export (e.g. one worksheet per set)
+//! array / one worksheet) has nowhere to put the 2nd, 3rd, … set, so an
+//! exporter captures exactly **one** — set 0 by default, or the set chosen with
+//! [`Exporter::with_set`] (the UI passes the result sub-tab the user is looking
+//! at). Other sets are ignored. Multi-set export (e.g. one worksheet per set)
 //! is left for a future revision.
 //!
 //! ## Value formatting
@@ -129,7 +130,9 @@ pub struct Exporter {
     inner: Backend,
     /// Total data rows written so far.
     rows_written: u64,
-    /// `true` once result set 0's metadata has been seen. Late sets and any
+    /// Which result set of the batch to write; every other set is ignored.
+    target_set: usize,
+    /// `true` once the target set's metadata has been seen. Other sets and any
     /// rows arriving before metadata are ignored.
     started: bool,
     /// The first error encountered while writing header/rows, if any. Held here
@@ -169,9 +172,20 @@ impl Exporter {
         Ok(Self {
             inner,
             rows_written: 0,
+            target_set: 0,
             started: false,
             failure: None,
         })
+    }
+
+    /// Export result set `set_index` instead of the first one.
+    ///
+    /// The whole batch still executes — the sink just ignores every set but
+    /// this one.
+    #[must_use]
+    pub fn with_set(mut self, set_index: usize) -> Self {
+        self.target_set = set_index;
+        self
     }
 
     /// Flush and close the output, returning a summary. For XLSX this is where
@@ -204,8 +218,8 @@ impl RowSink for Exporter {
         if self.failure.is_some() {
             return Flow::Stop;
         }
-        // Only the first result set is exported; record its header once.
-        if set_index == 0 && !self.started {
+        // Only the target result set is exported; record its header once.
+        if set_index == self.target_set && !self.started {
             self.started = true;
             if let Err(e) = self.write_header(&columns) {
                 // Stash the error for `finish` to surface, then stop the stream.
@@ -220,9 +234,9 @@ impl RowSink for Exporter {
         if self.failure.is_some() {
             return Flow::Stop;
         }
-        // Ignore rows for any set other than the first, and any rows that
-        // somehow precede metadata.
-        if set_index != 0 || !self.started {
+        // Ignore rows for any other set, and any rows that somehow precede
+        // metadata.
+        if set_index != self.target_set || !self.started {
             return Flow::Continue;
         }
         for row in &rows {
@@ -237,6 +251,11 @@ impl RowSink for Exporter {
 
     async fn on_set_end(&mut self, _set_index: usize, _affected: Option<u64>) -> Flow {
         // Nothing to do: CSV/JSON flush at `finish`, XLSX saves at `finish`.
+        //
+        // Deliberately *not* stopping once the target set has been written: the
+        // rest of the batch may carry the `COMMIT`/`ROLLBACK` that closes a
+        // transaction an earlier statement opened, and abandoning the stream
+        // would leave it open on the session.
         Flow::Continue
     }
 }
@@ -550,8 +569,33 @@ id,amount,blob,ts,geo
     }
 
     #[tokio::test]
-    async fn only_first_result_set_is_exported() {
-        // Set 0 contributes rows; set 1's meta/rows are ignored (v0.1 limit).
+    async fn with_set_exports_the_chosen_result_set() {
+        // The UI exports whichever result sub-tab is open, so a batch's second
+        // set must be exportable — with only its own columns and rows.
+        let columns0 = vec![col("a", 0, LogicalType::Integer)];
+        let columns1 = vec![col("b", 0, LogicalType::Integer)];
+
+        let tmp = NamedTempFile::new().unwrap();
+        let mut exp = Exporter::create(ExportFormat::Csv, tmp.path(), test_csv_opts())
+            .unwrap()
+            .with_set(1);
+
+        exp.on_meta(0, columns0).await;
+        exp.on_rows(0, vec![vec![CellValue::I64(1)]]).await;
+        exp.on_set_end(0, None).await;
+
+        exp.on_meta(1, columns1).await;
+        exp.on_rows(1, vec![vec![CellValue::I64(99)]]).await;
+        exp.on_set_end(1, None).await;
+
+        let summary = exp.finish().unwrap();
+        assert_eq!(summary.rows_written, 1, "only set 1's row counts");
+        assert_eq!(read_to_string(tmp.path()), "b\n99\n");
+    }
+
+    #[tokio::test]
+    async fn only_the_target_result_set_is_exported() {
+        // Default target is set 0; set 1's meta/rows are ignored.
         let columns0 = vec![col("a", 0, LogicalType::Integer)];
         let columns1 = vec![col("b", 0, LogicalType::Integer)];
 

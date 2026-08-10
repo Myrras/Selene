@@ -124,6 +124,8 @@ export function ResultsPanel({ tabId }: ResultsPanelProps) {
         undefined,
         channel,
         csvOptions,
+        // Export the set the user is looking at, not always the batch's first.
+        active?.setIndex,
       );
       toasts.update(toastId, {
         kind: "success",

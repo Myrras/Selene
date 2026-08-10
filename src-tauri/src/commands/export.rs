@@ -75,15 +75,18 @@ impl CsvExportOptions {
 struct ProgressSink {
     exporter: Exporter,
     channel: Channel<ExportEvent>,
+    /// The result set being exported; progress counts only its rows.
+    target_set: usize,
     /// Running count of rows handed to the exporter, for progress events.
     rows: u64,
 }
 
 impl ProgressSink {
-    fn new(exporter: Exporter, channel: Channel<ExportEvent>) -> Self {
+    fn new(exporter: Exporter, channel: Channel<ExportEvent>, target_set: usize) -> Self {
         Self {
             exporter,
             channel,
+            target_set,
             rows: 0,
         }
     }
@@ -96,9 +99,13 @@ impl RowSink for ProgressSink {
     }
 
     async fn on_rows(&mut self, set_index: usize, rows: Vec<Vec<CellValue>>) -> Flow {
-        // Only the first result set is exported (a flat file has nowhere to put
-        // later sets); count progress for that set only, matching the Exporter.
-        let batch = if set_index == 0 { rows.len() as u64 } else { 0 };
+        // Only one result set is exported (a flat file has nowhere to put the
+        // others); count progress for that set only, matching the Exporter.
+        let batch = if set_index == self.target_set {
+            rows.len() as u64
+        } else {
+            0
+        };
         let flow = self.exporter.on_rows(set_index, rows).await;
         if batch > 0 {
             self.rows += batch;
@@ -118,7 +125,10 @@ impl RowSink for ProgressSink {
     }
 }
 
-/// Run a query and export its first result set to `path` in `format`.
+/// Run a query and export one of its result sets to `path` in `format`.
+///
+/// `set_index` picks the set (the result sub-tab the user is looking at);
+/// omitted means the first one.
 ///
 /// Progress is streamed as [`ExportEvent::Progress`]; the command emits a final
 /// [`ExportEvent::Done`] (also returning the [`ExportSummary`]) on success, or
@@ -136,11 +146,14 @@ pub async fn export_result(
     format: ExportFormat,
     path: String,
     max_rows: Option<u64>,
+    // Which result set of the batch to write; defaults to the first.
+    set_index: Option<usize>,
     // CSV-specific options; ignored for JSON/XLSX.
     csv_options: Option<CsvExportOptions>,
     on_progress: Channel<ExportEvent>,
 ) -> Result<ExportSummary, IpcError> {
     let target = PathBuf::from(&path);
+    let target_set = set_index.unwrap_or(0);
     let opts = ExecOptions {
         max_rows,
         batch_size: BATCH_SIZE,
@@ -157,12 +170,12 @@ pub async fn export_result(
     };
 
     let exporter = match Exporter::create(format, &target, csv_opts) {
-        Ok(e) => e,
+        Ok(e) => e.with_set(target_set),
         Err(e) => return Err(fail(&on_progress, e.into())),
     };
 
     let cancel = selene_core::CancelToken::new();
-    let mut sink = ProgressSink::new(exporter, on_progress.clone());
+    let mut sink = ProgressSink::new(exporter, on_progress.clone(), target_set);
 
     // Execute into the progress sink. The session is locked for the duration,
     // serializing with any concurrent query on the same session (v0.1).

@@ -183,7 +183,7 @@ the snake_case Rust parameters.
 | `guard_check`              | `{ sql, readOnly }`                                                                         | `GuardVerdict`                                    |
 | `query_run`                | `{ sessionId, sql, maxRows?, onEvent: Channel<QueryEvent> }`                                | `{ queryId }`                                     |
 | `query_cancel`             | `{ queryId }`                                                                               | –                                                 |
-| `export_result`            | `{ sessionId, sql, format, path, maxRows?, csvOptions?, onProgress: Channel<ExportEvent> }` | `ExportSummary`                                   |
+| `export_result`            | `{ sessionId, sql, format, path, maxRows?, setIndex?, csvOptions?, onProgress: Channel<ExportEvent> }` | `ExportSummary`                        |
 | `import_csv_analyze`       | `{ path, options? }`                                                                        | `CsvAnalysis` (headers, sampleRows, inferred[])   |
 | `import_csv`               | `{ sessionId, path, target, mapping, options, onProgress: Channel<ImportEvent> }`           | `ImportSummary`                                   |
 | `file_read`                | `{ path }`                                                                                  | `string`                                          |

@@ -41,12 +41,14 @@ const COLUMNS: Column[] = [
   },
 ];
 
-/** A tab whose buffer holds two statements, with one result set on screen. */
-function seedTab(bufferSql: string, executedSql: string): string {
+/** A tab with `sets` result sets on screen, the first one active. */
+function seedTab(bufferSql: string, executedSql: string, sets = 1): string {
   const store = useEditorStore.getState();
   const id = store.addTab("session-1", bufferSql);
   store.resetResult(id, executedSql);
-  useEditorStore.getState().resultMeta(id, 0, COLUMNS);
+  for (let i = 0; i < sets; i++) {
+    useEditorStore.getState().resultMeta(id, i, COLUMNS);
+  }
   return id;
 }
 
@@ -71,6 +73,20 @@ describe("ResultsPanel — export", () => {
 
     await waitFor(() => expect(mockExport).toHaveBeenCalledTimes(1));
     expect(mockExport.mock.calls[0][1]).toBe("SELECT * FROM big;");
+  });
+
+  it("exports the result sub-tab the user is looking at, not always the first", async () => {
+    const batch = "SELECT * FROM overzicht;\nSELECT * FROM details;";
+    const id = seedTab(batch, batch, 2);
+
+    render(<ResultsPanel tabId={id} />);
+    // Switch to "Result 2" before exporting.
+    fireEvent.click(screen.getByRole("tab", { name: "Result 2" }));
+    await exportCsv();
+
+    await waitFor(() => expect(mockExport).toHaveBeenCalledTimes(1));
+    // 8th arg is setIndex; the second set is index 1.
+    expect(mockExport.mock.calls[0][7]).toBe(1);
   });
 
   it("falls back to the tab buffer when the run recorded no SQL", async () => {
