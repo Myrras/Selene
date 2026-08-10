@@ -48,6 +48,12 @@ export interface ResultState {
    */
   runId: number;
   queryId: string | null;
+  /**
+   * The SQL this run actually executed. `Cmd+Enter` runs the *selection* when
+   * there is one, so the tab's full buffer is not what produced these rows —
+   * export re-runs the query and must use this, not `tab.sql`.
+   */
+  sql: string;
   resultSets: ResultSet[];
   /** Active result-set sub-tab index. */
   activeSet: number;
@@ -128,6 +134,7 @@ function emptyResult(): ResultState {
     status: "idle",
     runId: nextRunId(),
     queryId: null,
+    sql: "",
     resultSets: [],
     activeSet: 0,
     rowCount: 0,
@@ -203,7 +210,8 @@ interface EditorState {
   setActiveSet: (id: string, setIndex: number) => void;
 
   // --- streaming result mutations (driven by the query channel) ---
-  resetResult: (id: string) => void;
+  /** Clear a tab's results and record the SQL the new run executes. */
+  resetResult: (id: string, sql?: string) => void;
   resultStarted: (id: string, queryId: string) => void;
   resultMeta: (id: string, setIndex: number, columns: Column[]) => void;
   resultAppendRows: (id: string, setIndex: number, rows: CellValue[][]) => void;
@@ -450,11 +458,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   // previous query's rows), and an "idle" slot renders the empty placeholder —
   // the run looked like nothing was happening. `startedAt` is stamped here too,
   // so the timer covers the whole run including that wait.
-  resetResult: (id) =>
+  resetResult: (id, sql = "") =>
     set((state) => ({
       results: {
         ...state.results,
-        [id]: { ...emptyResult(), status: "running", startedAt: Date.now() },
+        [id]: {
+          ...emptyResult(),
+          sql,
+          status: "running",
+          startedAt: Date.now(),
+        },
       },
     })),
 

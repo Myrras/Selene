@@ -62,7 +62,11 @@ export function ResultsPanel({ tabId }: ResultsPanelProps) {
 
   async function doExport(format: ExportFormat) {
     setExportOpen(false);
-    if (!tab?.sessionId || !tab.sql.trim()) {
+    // Export re-runs the query, so it must re-run *what produced these rows* —
+    // the run's own SQL, which is the editor selection when there was one. The
+    // tab buffer is only a fallback for results predating this field.
+    const exportSql = result?.sql.trim() || (tab?.sql ?? "");
+    if (!tab?.sessionId || !exportSql.trim()) {
       toastError("Nothing to export", "Connect and run a query first.");
       return;
     }
@@ -114,7 +118,7 @@ export function ResultsPanel({ tabId }: ResultsPanelProps) {
           : undefined;
       const summary = await exportResult(
         tab.sessionId,
-        tab.sql,
+        exportSql,
         format,
         path,
         undefined,

@@ -107,7 +107,7 @@ export async function runQuery(opts: RunOptions): Promise<void> {
   }
 
   // (2) Reset result state and open the streaming channel.
-  store.resetResult(tabId);
+  store.resetResult(tabId, sql);
 
   const channel = createQueryChannel((event: QueryEvent) => {
     const s = useEditorStore.getState();
