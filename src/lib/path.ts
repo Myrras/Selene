@@ -14,3 +14,15 @@ export function parentDir(path: string): string {
   const idx = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
   return idx > 0 ? path.slice(0, idx) : path;
 }
+
+/**
+ * `path` relative to whichever of `roots` contains it (longest root wins, so a
+ * nested open folder beats its parent). Falls back to the absolute path when no
+ * root matches — same as VS Code's "Copy Relative Path" outside a workspace.
+ */
+export function relativePath(path: string, roots: string[]): string {
+  const root = roots
+    .filter((r) => path.startsWith(r) && /^[\\/]/.test(path.slice(r.length)))
+    .sort((a, b) => b.length - a.length)[0];
+  return root ? path.slice(root.length + 1) : path;
+}

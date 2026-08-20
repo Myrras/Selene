@@ -32,7 +32,7 @@ import {
   bindTabConnection,
   closeTabAndSession,
 } from "./tabSession";
-import { basename, parentDir } from "./path";
+import { basename, parentDir, relativePath } from "./path";
 import { useConflictStore } from "./fsSync";
 
 const SQL_FILTER = [{ name: "SQL", extensions: ["sql"] }];
@@ -213,4 +213,26 @@ export function closeActiveTab(): void {
 export function closeFolder(path: string): void {
   useWorkspaceStore.getState().removeFolder(path);
   void fsUnwatch(path).catch(() => undefined);
+}
+
+/**
+ * Copy the active tab's path to the clipboard (Cmd/Ctrl+Shift+1 / +2).
+ * `relative` resolves against the workspace folder containing the file.
+ * A scratch tab has no path yet, so it just reports that.
+ */
+export async function copyActivePath(relative = false): Promise<void> {
+  const path = activeTab()?.filePath;
+  if (!path) {
+    toastError("No file path", "Save this tab to a file first.");
+    return;
+  }
+  const text = relative
+    ? relativePath(path, useWorkspaceStore.getState().openFolders)
+    : path;
+  try {
+    await navigator.clipboard.writeText(text);
+    toastSuccess(`Copied ${basename(path)} path`);
+  } catch (e) {
+    toastError("Could not copy path", asIpcError(e).message);
+  }
 }
