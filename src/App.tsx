@@ -31,6 +31,7 @@ import {
   newQuery,
   openFileDialog,
   closeActiveTab,
+  copyActivePath,
   openFolderDialog,
   saveActiveTab,
   saveAllDirtyFileTabs,
@@ -194,6 +195,8 @@ export default function App() {
       listen("menu:save", () => void saveActiveTab()),
       listen("menu:save-as", () => void saveActiveTab(true)),
       listen("menu:close-tab", () => closeActiveTab()),
+      listen("menu:copy-path", () => void copyActivePath()),
+      listen("menu:copy-relative-path", () => void copyActivePath(true)),
     ];
 
     const onKey = (e: KeyboardEvent) => {
@@ -211,6 +214,10 @@ export default function App() {
       } else if (k === "w") {
         e.preventDefault();
         closeActiveTab();
+      } else if (e.shiftKey && (e.code === "Digit1" || e.code === "Digit2")) {
+        // Cmd/Ctrl+Shift+1 / +2 — "!" and "@" on a US layout.
+        e.preventDefault();
+        void copyActivePath(e.code === "Digit2");
       } else if (k === ",") {
         // Windows/Linux have no native menu, so bind the macOS Cmd+, accelerator.
         e.preventDefault();
