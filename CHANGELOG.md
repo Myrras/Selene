@@ -8,6 +8,17 @@ Internal refactors, tooling, and chores are intentionally omitted. (Automated
 changelog generation from Conventional Commits via git-cliff is planned but not
 yet set up.)
 
+## [1.4.10] - 2026-08-20
+
+### Fixed
+
+- **Enter no longer adds extra indentation while typing a query.** Pressing
+  Enter inside a multi-line statement kept adding an indent level on every new
+  line, making the editor fight your layout. A new line now simply copies the
+  previous line's indentation exactly (as Zed does), in both the query editor
+  and the multi-target editor. Accepting an autocomplete suggestion with Enter
+  still works.
+
 ## [1.4.9] - 2026-08-04
 
 ### Fixed
