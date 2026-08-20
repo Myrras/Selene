@@ -8,6 +8,18 @@ Internal refactors, tooling, and chores are intentionally omitted. (Automated
 changelog generation from Conventional Commits via git-cliff is planned but not
 yet set up.)
 
+## [1.4.12] - 2026-08-20
+
+### Fixed
+
+- **A query that writes behind a CTE now reports its affected rows.** A
+  `WITH … SELECT … INTO <table>` batch showed neither rows nor a row count, so a
+  write that really did create and fill a table looked like it had done nothing.
+  A leading CTE no longer hides what the statement actually does: such a batch
+  now reports "*n* rows affected", asks for confirmation before running, and is
+  refused on a read-only connection. The same applies to a CTE-prefixed
+  `UPDATE`/`DELETE`, which was previously treated as a plain read.
+
 ## [1.4.11] - 2026-08-20
 
 ### Added
