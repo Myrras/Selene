@@ -707,18 +707,30 @@ fn is_txn_wrapped_dml_only_batch(statements: &[&str], allow_commit: bool) -> boo
 /// Whether a (sanitized) statement is a `SELECT … INTO <table>` targeting a
 /// **permanent** table — a write in read clothing: it creates and fills a new
 /// table and returns no rows. `INTO` cannot occur inside a plain `SELECT`
-/// (subqueries can't contain it), so a leading `SELECT` plus a top-level `INTO`
-/// token is sufficient.
+/// (subqueries can't contain it), so the statement's effective verb being
+/// `SELECT` plus a top-level `INTO` token is sufficient.
+///
+/// A leading CTE counts: `WITH a AS (…) SELECT … INTO t` is the same write, and
+/// missing it left the batch on the row-streaming path with no affected count
+/// (and unblocked on a read-only connection). Top-level `(…)` groups are
+/// blanked first so an `INTO` inside a CTE body cannot mislead the scan.
 ///
 /// A `SELECT … INTO #tmp` (temp-table target) deliberately returns `false`: it
 /// is a session-scoped read-side scratch pattern, and routing it through the
 /// driver's `sp_executesql` counting path would drop the temp table the moment
 /// the dynamic batch ends.
 fn is_select_into(stmt: &str) -> bool {
-    if !first_keyword(stmt).is_some_and(|kw| kw.eq_ignore_ascii_case("SELECT")) {
+    if effective_verb(stmt).as_deref() != Some("SELECT") {
         return false;
     }
-    let mut words = stmt.split_ascii_whitespace();
+    let Some(stripped) = strip_paren_groups(stmt) else {
+        return false;
+    };
+    // Start at the outer SELECT: a CTE prefix cannot contain a top-level INTO,
+    // but skipping it keeps the scan aligned with the verb we matched.
+    let mut words = stripped
+        .split_ascii_whitespace()
+        .skip_while(|w| !w.eq_ignore_ascii_case("SELECT"));
     while let Some(w) = words.next() {
         if w.eq_ignore_ascii_case("INTO") {
             return !words
@@ -754,7 +766,7 @@ pub(crate) fn is_single_dml_batch(sql: &str) -> bool {
 
 /// Classify a DML statement (INSERT/UPDATE/DELETE/MERGE/SELECT INTO).
 fn classify_dml(stmt: &str, level: &mut GuardLevel, reasons: &mut Vec<String>) {
-    let kw = first_keyword(stmt).unwrap_or_default();
+    let kw = effective_verb(stmt).unwrap_or_default();
 
     // Only reached via the SELECT INTO promotion in `classify`.
     if kw.eq_ignore_ascii_case("SELECT") {
@@ -792,13 +804,39 @@ fn classify_ddl(stmt: &str, level: &mut GuardLevel, reasons: &mut Vec<String>) {
     }
 }
 
-/// Determine the [`Kind`] of a statement from its first keyword.
+/// The verb that decides how a statement is judged and run: its leading
+/// keyword, except that a leading CTE (`WITH a AS (…), b AS (…) <verb> …`) is
+/// looked through — the `WITH` only decorates the statement that follows it,
+/// so `WITH … SELECT … INTO t` is a write and `WITH … UPDATE …` is DML.
+///
+/// Top-level `(…)` groups are blanked before the scan, so a CTE body's own
+/// verb cannot be mistaken for the outer one. Falls back to `WITH` when the
+/// decorated statement cannot be resolved (unbalanced parens, no verb found),
+/// keeping the old, read-shaped judgement for input we do not understand.
+fn effective_verb(stmt: &str) -> Option<String> {
+    let kw = first_keyword(stmt)?.to_ascii_uppercase();
+    if kw != "WITH" {
+        return Some(kw);
+    }
+    let verb = strip_paren_groups(stmt).and_then(|stripped| {
+        stripped
+            .split_ascii_whitespace()
+            .find(|w| {
+                matches!(
+                    w.to_ascii_uppercase().as_str(),
+                    "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "MERGE"
+                )
+            })
+            .map(|w| w.to_ascii_uppercase())
+    });
+    Some(verb.unwrap_or(kw))
+}
+
+/// Determine the [`Kind`] of a statement from its effective verb.
 fn leading_kind(stmt: &str) -> Kind {
-    let Some(kw) = first_keyword(stmt) else {
+    let Some(upper) = effective_verb(stmt) else {
         return Kind::Unknown;
     };
-    // Compare case-insensitively against the known keyword sets.
-    let upper = kw.to_uppercase();
     match upper.as_str() {
         "SELECT" | "WITH" | "SHOW" | "EXPLAIN" | "PRINT" | "DECLARE" | "SET" | "USE" => Kind::Read,
         "INSERT" | "UPDATE" | "DELETE" | "MERGE" => Kind::Dml,
@@ -1537,9 +1575,6 @@ mod tests {
         assert!(!is_countable_dml_batch(
             "UPDATE t SET x = 1 OUTPUT inserted.id WHERE id = 1"
         ));
-        assert!(!is_countable_dml_batch(
-            "WITH c AS (SELECT 1) DELETE FROM c"
-        ));
         assert!(!is_countable_dml_batch("EXEC some_proc"));
         assert!(!is_countable_dml_batch("CREATE TABLE t (id INT)"));
         assert!(!is_countable_dml_batch("SELECT 1; UPDATE t SET x = 1"));
@@ -1622,6 +1657,54 @@ mod tests {
             classify("SELECT a INTO #tmp FROM t", true).level,
             GuardLevel::Info
         );
+    }
+
+    #[test]
+    fn cte_prefixed_statements_are_judged_on_their_verb() {
+        // The reported bug: a multi-CTE `SELECT … INTO <table>` returned neither
+        // rows nor an affected count, because the leading `WITH` hid the verb.
+        let reported = "WITH corr AS (\n    SELECT d.id AS dossier_id, a.id AS address_id\n    FROM dossier d\n    INNER JOIN address a ON a.id = d.address_id AND a.zip <> '9999XX'\n    WHERE d.deleted IS NULL\n),\npolicy AS (\n    SELECT o.dossier_id, a.id AS address_id,\n           ROW_NUMBER() OVER (PARTITION BY o.dossier_id ORDER BY o.id DESC) AS rn\n    FROM offer o\n    INNER JOIN address a ON a.id = o.address_id\n    LEFT JOIN corr ON corr.dossier_id = o.dossier_id\n)\nSELECT o.dossier_id, o.id AS offer_id,\n       COALESCE(policy.address_id, corr.address_id) AS address_id\nINTO\n    otherdb.dbo.Backup_collateral\nFROM offer o\nLEFT JOIN policy ON policy.dossier_id = o.dossier_id AND policy.rn = 1\nLEFT JOIN corr ON corr.dossier_id = o.dossier_id\nWHERE o.deleted IS NULL";
+        assert!(is_countable_dml_batch(reported));
+        let v = classify_rw(reported);
+        assert_eq!(v.level, GuardLevel::Confirm);
+        assert!(v.reasons.iter().any(|r| r.contains("SELECT INTO")));
+        assert_eq!(classify(reported, true).level, GuardLevel::Block);
+
+        // Same shape, minimal: countable, and a write in read-only mode.
+        assert!(is_countable_dml_batch(
+            "WITH c AS (SELECT a FROM s) SELECT a INTO backup_t FROM c"
+        ));
+        // A CTE-wrapped UPDATE/DELETE returns no rows either — also countable,
+        // and no longer mistaken for a plain read by the guard.
+        assert!(is_countable_dml_batch(
+            "WITH c AS (SELECT id FROM s) UPDATE t SET x = 1 FROM c WHERE t.id = c.id"
+        ));
+        assert!(is_countable_dml_batch("WITH c AS (SELECT 1) DELETE FROM c"));
+        assert_eq!(
+            classify("WITH c AS (SELECT 1) DELETE FROM c", true).level,
+            GuardLevel::Block
+        );
+
+        // A plain CTE read stays a read: streaming path, benign verdict.
+        assert!(!is_countable_dml_batch(
+            "WITH c AS (SELECT 1 AS a) SELECT a FROM c"
+        ));
+        assert_eq!(
+            classify("WITH c AS (SELECT 1 AS a) SELECT a FROM c", true).level,
+            GuardLevel::Info
+        );
+        // A temp-table target still streams (sp_executesql would drop the table),
+        // and an `INTO` that only appears inside a CTE body is not a SELECT INTO.
+        assert!(!is_countable_dml_batch(
+            "WITH c AS (SELECT a FROM s) SELECT a INTO #tmp FROM c"
+        ));
+        assert!(!is_countable_dml_batch(
+            "WITH c AS (SELECT 'INTO x' AS a FROM s) SELECT a FROM c"
+        ));
+        // A CTE-wrapped DML with OUTPUT would lose rows on the counting path.
+        assert!(!is_countable_dml_batch(
+            "WITH c AS (SELECT id FROM s) DELETE FROM t OUTPUT deleted.id FROM c WHERE t.id = c.id"
+        ));
     }
 
     #[test]

@@ -627,6 +627,22 @@ async fn select_into_reports_affected_count() {
     )
     .await;
     assert_eq!(check.sets()[0].rows, vec![vec![CellValue::I64(2)]]);
+
+    // The same write behind a CTE prefix (the reported bug): a leading `WITH`
+    // must not push it back onto the row-streaming path, where the count is lost.
+    let (outcome, sink) = run(
+        conn,
+        "WITH picked AS (SELECT id FROM dbo.src WHERE id <= 2)\n\
+         SELECT id INTO dbo.src_backup_cte FROM picked",
+        &ExecOptions::default(),
+    )
+    .await;
+
+    assert_eq!(outcome.result_sets, 1, "one affected-count set");
+    assert_eq!(outcome.total_rows, 0);
+    let sets = sink.sets();
+    assert!(sets[0].columns.is_empty(), "count set has no columns");
+    assert_eq!(sets[0].affected, vec![Some(2)]);
 }
 
 /// `INSERT … SELECT` inside a semicolon-free transaction wrapper must report
