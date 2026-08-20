@@ -254,6 +254,13 @@ just version 1.1.0  # bump + sync version across all manifests
 just version-check  # verify versions are in sync
 ```
 
+Every recipe exports `CARGO_TARGET_DIR` pointing at the **main checkout's**
+`target/`, so git worktrees share one build cache instead of each starting
+cold. Cargo locks that directory: two builds in different worktrees serialise
+rather than run in parallel. Release builds use cargo's default codegen
+settings — fat LTO + `codegen-units = 1` made the final link ~110s slower on
+every build for ~3.5 MB of binary size.
+
 ### Local MSSQL for development
 
 The app binds **no ports** (it's a client) — point it at any host:port. For tests
