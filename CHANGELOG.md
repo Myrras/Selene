@@ -8,6 +8,17 @@ Internal refactors, tooling, and chores are intentionally omitted. (Automated
 changelog generation from Conventional Commits via git-cliff is planned but not
 yet set up.)
 
+## [1.4.11] - 2026-08-20
+
+### Added
+
+- **Copy the current file's path with a shortcut.** Cmd/Ctrl+Shift+1 copies the
+  active tab's full path to the clipboard; Cmd/Ctrl+Shift+2 copies it relative to
+  the workspace folder that contains the file (the deepest open folder wins, and
+  a file outside every open folder falls back to its full path). Both are also in
+  the File menu on macOS as *Copy Path* / *Copy Relative Path*. A tab that has
+  never been saved has no path yet and says so.
+
 ## [1.4.10] - 2026-08-20
 
 ### Fixed

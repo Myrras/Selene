@@ -30,7 +30,7 @@ dev:
 dev-signed: _signed-conf
     pnpm tauri build --debug --bundles app --config src-tauri/tauri.dev-signed.conf.json
     @just sweep
-    open target/debug/bundle/macos/Selene.app
+    open "$CARGO_TARGET_DIR/debug/bundle/macos/Selene.app"
 
 # Reclaim stale build artifacts (old dependency versions + other toolchains)
 # WITHOUT touching the current build, so `target/` stops growing without bound.
@@ -61,12 +61,12 @@ build-signed: _signed-conf
     pnpm install
     pnpm tauri build --bundles app --config src-tauri/tauri.dev-signed.conf.json
     @just sweep
-    open target/release/bundle/macos
+    open "$CARGO_TARGET_DIR/release/bundle/macos"
 
 # Build the signed release and copy it straight into /Applications.
 install-signed: build-signed
     rm -rf "/Applications/Selene.app"
-    cp -R target/release/bundle/macos/Selene.app "/Applications/Selene.app"
+    cp -R "$CARGO_TARGET_DIR/release/bundle/macos/Selene.app" "/Applications/Selene.app"
     @echo "Installed → /Applications/Selene.app"
 
 # Guard for the two signed recipes. The config is gitignored (it names *your*

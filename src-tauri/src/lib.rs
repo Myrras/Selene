@@ -111,6 +111,21 @@ pub fn run() {
                     Some("CmdOrCtrl+Shift+S"),
                 )?;
 
+                let copy_path = MenuItem::with_id(
+                    app,
+                    "copy-path",
+                    "Copy Path",
+                    true,
+                    Some("CmdOrCtrl+Shift+1"),
+                )?;
+                let copy_relative_path = MenuItem::with_id(
+                    app,
+                    "copy-relative-path",
+                    "Copy Relative Path",
+                    true,
+                    Some("CmdOrCtrl+Shift+2"),
+                )?;
+
                 let file_menu = SubmenuBuilder::new(app, "File")
                     .item(&new_query)
                     .item(&close_tab)
@@ -120,6 +135,9 @@ pub fn run() {
                     .separator()
                     .item(&save)
                     .item(&save_as)
+                    .separator()
+                    .item(&copy_path)
+                    .item(&copy_relative_path)
                     .build()?;
 
                 let edit_menu = SubmenuBuilder::new(app, "Edit")
@@ -156,6 +174,10 @@ pub fn run() {
                         Some("menu:save-as")
                     } else if id == "close-tab" {
                         Some("menu:close-tab")
+                    } else if id == "copy-path" {
+                        Some("menu:copy-path")
+                    } else if id == "copy-relative-path" {
+                        Some("menu:copy-relative-path")
                     } else {
                         None
                     };
