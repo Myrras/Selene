@@ -30,7 +30,10 @@ uuid = { version = "1" }
 debug = "line-tables-only"
 
 [profile.release]
-# Smaller, faster release binaries for a desktop app.
-codegen-units = 1
-lto = true
+# ponytail: cargo's defaults (16 codegen units, no cross-crate LTO). Fat LTO +
+# codegen-units = 1 shaved ~3.5 MB off the binary but added ~110s to the final,
+# single-threaded link on EVERY build (2m18s -> 29s for a one-crate change).
+# Not worth it for a desktop app that gets rebuilt many times a day. Re-add
+# `lto = true` + `codegen-units = 1` if bundle size ever matters more than
+# build time.
 strip = true
