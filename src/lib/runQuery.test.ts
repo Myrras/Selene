@@ -77,7 +77,7 @@ beforeEach(() => {
   capturedOnEvent = null;
   useEditorStore.setState({ tabs: [], activeTabId: null, results: {} });
   // Seed an empty result slot for tab-1 so reducers have somewhere to write.
-  useEditorStore.getState().resetResult("tab-1");
+  useEditorStore.getState().resetResult("tab-1", "select 1");
   // `clearMocks` wipes call history but not implementations; reset both to
   // safe defaults so an implementation set in one test never leaks into the
   // next. Individual tests override these as needed.
@@ -191,6 +191,14 @@ describe("runQuery — streaming into the store", () => {
     await runQuery(opts());
     expect(vi.mocked(createQueryChannel)).toHaveBeenCalledTimes(1);
     expect(capturedOnEvent).toBeTypeOf("function");
+  });
+
+  // Guards the export path: the results panel re-runs `ResultState.sql`, so a
+  // run of a selection must record that selection, not the tab buffer.
+  it("records the executed SQL on the result state", async () => {
+    mockRun.mockResolvedValue({ queryId: "q-2" });
+    await runQuery(opts({ sql: "SELECT id FROM task" }));
+    expect(result("tab-1").sql).toBe("SELECT id FROM task");
   });
 
   it("reflects started -> meta -> rows -> finished pushed over the channel", async () => {
