@@ -8,6 +8,19 @@ Internal refactors, tooling, and chores are intentionally omitted. (Automated
 changelog generation from Conventional Commits via git-cliff is planned but not
 yet set up.)
 
+## [1.4.13] - 2026-09-21
+
+### Fixed
+
+- **Export now writes the query you actually ran.** With several statements in
+  one tab, exporting the results of a selected statement wrote the rows of the
+  *first* statement in the tab instead — so every export of that tab produced the
+  same file, no matter which query was run. Export re-runs your query to stream
+  the full result set to disk, and it was re-running the whole editor buffer
+  rather than the selection that produced the grid. It now re-runs exactly the
+  SQL of the run you are exporting. This applies to CSV, JSON and Excel exports,
+  and to multi-target runs.
+
 ## [1.4.12] - 2026-08-20
 
 ### Fixed
