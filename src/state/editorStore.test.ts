@@ -167,7 +167,7 @@ describe("editorStore result reducers", () => {
 
     const beforeRunId = result(id).runId;
 
-    s().resetResult(id);
+    s().resetResult(id, "select 1");
     const r = result(id);
     // Reset happens at run kickoff, so the panel shows "running" (spinner +
     // live timer) instead of the idle placeholder while the backend starts up.
@@ -198,7 +198,7 @@ describe("editorStore result reducers", () => {
     const id = freshTab();
     const s = () => useEditorStore.getState();
 
-    s().resetResult(id);
+    s().resetResult(id, "select 1");
     // Running + a start stamp from the moment the run is kicked off, so the
     // spinner and timer are visible before the backend's `started` event lands.
     expect(result(id).status).toBe("running");

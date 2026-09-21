@@ -62,7 +62,10 @@ export function ResultsPanel({ tabId }: ResultsPanelProps) {
 
   async function doExport(format: ExportFormat) {
     setExportOpen(false);
-    if (!tab?.sessionId || !tab.sql.trim()) {
+    // Export re-runs the query, so use the SQL of the run that produced these
+    // results (may be a selection) — not the whole tab buffer.
+    const sql = result?.sql?.trim() ? result.sql : (tab?.sql ?? "");
+    if (!tab?.sessionId || !sql.trim()) {
       toastError("Nothing to export", "Connect and run a query first.");
       return;
     }
@@ -114,7 +117,7 @@ export function ResultsPanel({ tabId }: ResultsPanelProps) {
           : undefined;
       const summary = await exportResult(
         tab.sessionId,
-        tab.sql,
+        sql,
         format,
         path,
         undefined,

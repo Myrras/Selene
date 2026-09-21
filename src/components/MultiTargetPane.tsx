@@ -377,7 +377,8 @@ export function MultiTargetPane({ tabId }: MultiTargetPaneProps) {
       // list from the top of this run regardless of where it was left.
       stickToBottom.current = true;
       useMultiTargetStore.getState().startRun(tabId, mode, total, "");
-      if (mode === "results") useEditorStore.getState().resetResult(tabId);
+      if (mode === "results")
+        useEditorStore.getState().resetResult(tabId, view.querySql);
 
       const buffer = createProgressBuffer(tabId);
       const channel = createMultiChannel((ev) => handleEvent(ev, mode, buffer));

@@ -42,6 +42,13 @@ export interface ResultSet {
 export interface ResultState {
   status: RunStatus;
   /**
+   * The SQL this run actually executed (a selection, not necessarily the whole
+   * tab buffer). Export re-runs the query server-side, so it must re-run *this*
+   * text — using the tab buffer instead would export the first result set of
+   * the whole document, not what the grid is showing.
+   */
+  sql: string;
+  /**
    * Stable id for this run, assigned at reset/start and never cleared. Used to
    * key the grid so a *new* query resets the virtualizer while appends within
    * one run reuse it. (Distinct from `queryId`, which is nulled on finish.)
@@ -126,6 +133,7 @@ function nextRunId(): number {
 function emptyResult(): ResultState {
   return {
     status: "idle",
+    sql: "",
     runId: nextRunId(),
     queryId: null,
     resultSets: [],
@@ -203,7 +211,7 @@ interface EditorState {
   setActiveSet: (id: string, setIndex: number) => void;
 
   // --- streaming result mutations (driven by the query channel) ---
-  resetResult: (id: string) => void;
+  resetResult: (id: string, sql: string) => void;
   resultStarted: (id: string, queryId: string) => void;
   resultMeta: (id: string, setIndex: number, columns: Column[]) => void;
   resultAppendRows: (id: string, setIndex: number, rows: CellValue[][]) => void;
@@ -450,11 +458,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   // previous query's rows), and an "idle" slot renders the empty placeholder —
   // the run looked like nothing was happening. `startedAt` is stamped here too,
   // so the timer covers the whole run including that wait.
-  resetResult: (id) =>
+  resetResult: (id, sql) =>
     set((state) => ({
       results: {
         ...state.results,
-        [id]: { ...emptyResult(), status: "running", startedAt: Date.now() },
+        [id]: {
+          ...emptyResult(),
+          sql,
+          status: "running",
+          startedAt: Date.now(),
+        },
       },
     })),
 
