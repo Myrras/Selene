@@ -1,7 +1,8 @@
 /**
- * ResultsPanel export: with several result sets, Export must target the
- * selected result sub-tab, not the first set. The save dialog and IPC are
- * mocked at their module boundaries.
+ * ResultsPanel export: Export re-runs the query, so it must re-run the SQL
+ * that produced the rows on screen (the selection, not the whole buffer) and
+ * write the selected result sub-tab, not the first set. The save dialog and
+ * IPC are mocked at their module boundaries.
  */
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -82,4 +83,26 @@ describe("ResultsPanel export", () => {
       );
     },
   );
+
+  /** Seed a one-set result whose run executed `executedSql`, then export CSV. */
+  async function exportCsvOf(bufferSql: string, executedSql: string) {
+    const s = useEditorStore.getState();
+    const id = s.addTab("session-1", bufferSql);
+    s.resetResult(id, executedSql);
+    s.resultMeta(id, 0, col("a"));
+
+    render(<ResultsPanel tabId={id} />);
+    fireEvent.click(screen.getByRole("button", { name: /export/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "CSV" }));
+    await waitFor(() => expect(mockExport).toHaveBeenCalledTimes(1));
+    return mockExport.mock.calls[0][1];
+  }
+
+  it("exports the SQL the run executed, not the whole tab buffer", async () => {
+    expect(await exportCsvOf(SQL, "SELECT 2 AS b;")).toBe("SELECT 2 AS b;");
+  });
+
+  it("falls back to the tab buffer when the run recorded no SQL", async () => {
+    expect(await exportCsvOf(SQL, "")).toBe(SQL);
+  });
 });
