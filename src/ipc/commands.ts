@@ -270,7 +270,8 @@ export function queryCancel(queryId: string): Promise<void> {
 // --- Export (streaming) ---------------------------------------------------
 
 /**
- * `export_result` -> run a query and write result set `setIndex` to `path`.
+ * `export_result` -> run a query and write result set `setIndex` (default:
+ * the first) to `path`.
  * Progress arrives on `onProgress` (a `Channel<ExportEvent>`); the awaited
  * result is the final `ExportSummary`.
  */

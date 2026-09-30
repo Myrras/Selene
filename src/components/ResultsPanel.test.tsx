@@ -68,11 +68,18 @@ describe("ResultsPanel export", () => {
       const label = { csv: "CSV", json: "JSON", xlsx: "Excel (.xlsx)" }[format];
       fireEvent.click(screen.getByRole("menuitem", { name: label }));
 
-      await waitFor(() => expect(mockExport).toHaveBeenCalledTimes(1));
-      const args = mockExport.mock.calls[0];
-      expect(args[1]).toBe(SQL);
-      expect(args[2]).toBe(format);
-      expect(args[7]).toBe(1);
+      await waitFor(() =>
+        expect(mockExport).toHaveBeenCalledWith(
+          "session-1",
+          SQL,
+          format,
+          "/tmp/out.csv",
+          undefined,
+          expect.anything(),
+          format === "csv" ? expect.any(Object) : undefined,
+          1,
+        ),
+      );
     },
   );
 });

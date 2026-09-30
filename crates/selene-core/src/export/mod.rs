@@ -188,12 +188,22 @@ impl Exporter {
     ///
     /// If a write failed earlier in the stream, that original error is returned
     /// here in preference to attempting a (likely also-failing) flush, so the
-    /// caller sees the root cause.
+    /// caller sees the root cause. It is also an error if the chosen result
+    /// set never arrived.
     pub fn finish(mut self) -> Result<ExportSummary, CoreError> {
         // A failure recorded during streaming takes precedence: report it
         // rather than masking it with a downstream flush error.
         if let Some(err) = self.failure.take() {
             return Err(err);
+        }
+        // The chosen set never arrived (e.g. data-dependent control flow took
+        // another branch on the re-run): fail rather than report an empty file
+        // as a successful export.
+        if !self.started {
+            return Err(CoreError::Export(format!(
+                "the query did not return result set {}",
+                self.set + 1
+            )));
         }
         match self.inner {
             Backend::Csv(e) => e.finish()?,
@@ -599,6 +609,21 @@ id,amount,blob,ts,geo
         let summary = exp.finish().unwrap();
         assert_eq!(summary.rows_written, 1);
         assert_eq!(read_to_string(tmp.path()), "b\n2\n");
+    }
+
+    #[tokio::test]
+    async fn missing_result_set_fails_finish() {
+        // Set 1 was chosen but the stream only produced set 0.
+        let tmp = NamedTempFile::new().unwrap();
+        let mut exp = Exporter::create(ExportFormat::Csv, tmp.path(), test_csv_opts())
+            .unwrap()
+            .with_set(1);
+        exp.on_meta(0, vec![col("a", 0, LogicalType::Integer)])
+            .await;
+        exp.on_rows(0, vec![vec![CellValue::I64(1)]]).await;
+        exp.on_set_end(0, None).await;
+
+        assert!(matches!(exp.finish(), Err(CoreError::Export(_))));
     }
 
     #[tokio::test]
