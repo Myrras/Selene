@@ -123,6 +123,8 @@ export function ResultsPanel({ tabId }: ResultsPanelProps) {
         undefined,
         channel,
         csvOptions,
+        // The re-run yields the same sets; export the one on screen.
+        active?.setIndex,
       );
       toasts.update(toastId, {
         kind: "success",

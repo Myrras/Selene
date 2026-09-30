@@ -8,6 +8,17 @@ Internal refactors, tooling, and chores are intentionally omitted. (Automated
 changelog generation from Conventional Commits via git-cliff is planned but not
 yet set up.)
 
+## [1.4.14] - 2026-09-30
+
+### Fixed
+
+- **Export now writes the result tab you have selected.** When a query returns
+  several result sets, exporting from "Result 2" or later still wrote the rows
+  of the *first* result. Export now writes the result set on screen, in CSV,
+  JSON and Excel alike. If re-running the query for the export no longer
+  produces that result set, the export fails with a message instead of saving
+  an empty file.
+
 ## [1.4.13] - 2026-09-21
 
 ### Fixed

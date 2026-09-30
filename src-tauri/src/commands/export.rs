@@ -1,6 +1,6 @@
 //! Streaming export-to-file command.
 //!
-//! [`export_result`] runs a query and writes its first result set straight to
+//! [`export_result`] runs a query and writes one result set straight to
 //! disk via the core [`Exporter`] (itself a [`RowSink`]), so a multi-million-row
 //! export never materialises in memory. It reuses the exact
 //! [`Connection::execute`](selene_core::Connection::execute) path the data grid
@@ -75,15 +75,18 @@ impl CsvExportOptions {
 struct ProgressSink {
     exporter: Exporter,
     channel: Channel<ExportEvent>,
+    /// The result set being exported (the one the exporter records).
+    set_index: usize,
     /// Running count of rows handed to the exporter, for progress events.
     rows: u64,
 }
 
 impl ProgressSink {
-    fn new(exporter: Exporter, channel: Channel<ExportEvent>) -> Self {
+    fn new(exporter: Exporter, set_index: usize, channel: Channel<ExportEvent>) -> Self {
         Self {
-            exporter,
+            exporter: exporter.with_set(set_index),
             channel,
+            set_index,
             rows: 0,
         }
     }
@@ -96,9 +99,13 @@ impl RowSink for ProgressSink {
     }
 
     async fn on_rows(&mut self, set_index: usize, rows: Vec<Vec<CellValue>>) -> Flow {
-        // Only the first result set is exported (a flat file has nowhere to put
-        // later sets); count progress for that set only, matching the Exporter.
-        let batch = if set_index == 0 { rows.len() as u64 } else { 0 };
+        // Only one result set is exported (a flat file has room for one); count
+        // progress for that set only, matching the Exporter.
+        let batch = if set_index == self.set_index {
+            rows.len() as u64
+        } else {
+            0
+        };
         let flow = self.exporter.on_rows(set_index, rows).await;
         if batch > 0 {
             self.rows += batch;
@@ -118,7 +125,9 @@ impl RowSink for ProgressSink {
     }
 }
 
-/// Run a query and export its first result set to `path` in `format`.
+/// Run a query and export result set `set_index` (default: the first) to
+/// `path` in `format`. The query is re-run, so `set_index` is the driver's
+/// index of the set the user is looking at.
 ///
 /// Progress is streamed as [`ExportEvent::Progress`]; the command emits a final
 /// [`ExportEvent::Done`] (also returning the [`ExportSummary`]) on success, or
@@ -136,6 +145,7 @@ pub async fn export_result(
     format: ExportFormat,
     path: String,
     max_rows: Option<u64>,
+    set_index: Option<usize>,
     // CSV-specific options; ignored for JSON/XLSX.
     csv_options: Option<CsvExportOptions>,
     on_progress: Channel<ExportEvent>,
@@ -162,7 +172,7 @@ pub async fn export_result(
     };
 
     let cancel = selene_core::CancelToken::new();
-    let mut sink = ProgressSink::new(exporter, on_progress.clone());
+    let mut sink = ProgressSink::new(exporter, set_index.unwrap_or(0), on_progress.clone());
 
     // Execute into the progress sink. The session is locked for the duration,
     // serializing with any concurrent query on the same session (v0.1).
