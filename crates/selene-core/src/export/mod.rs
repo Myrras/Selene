@@ -7,12 +7,12 @@
 //! grid uses — rows are written to disk batch-by-batch as they arrive, so a
 //! multi-million-row export never has to materialise in memory.
 //!
-//! ## v0.1 limitation: first result set only
+//! ## One result set per file
 //! A SQL batch can yield several result sets. A flat file (one CSV / one JSON
-//! array / one worksheet) has nowhere to put the 2nd, 3rd, … set, so this
-//! version exports **only the first result set (`set_index == 0`)** and
-//! silently ignores later ones. Multi-set export (e.g. one worksheet per set)
-//! is left for a future revision.
+//! array / one worksheet) has room for only one, so an exporter records **one
+//! chosen set** — the first by default, or the one picked with
+//! [`Exporter::with_set`] — and silently ignores the rest. Multi-set export
+//! (e.g. one worksheet per set) is left for a future revision.
 //!
 //! ## Value formatting
 //! CSV and XLSX share [`cell_to_text`]; JSON uses its own
@@ -115,7 +115,7 @@ pub struct ExportSummary {
 /// Construct with [`Exporter::create`], feed it as a
 /// [`RowSink`](crate::driver::RowSink) to `Connection::execute`, then call
 /// [`Exporter::finish`] to flush and close (XLSX is actually written to disk at
-/// `finish`). Only the first result set is recorded; see the module docs.
+/// `finish`). Only one result set is recorded; see the module docs.
 ///
 /// ## Surfacing write errors
 /// The [`RowSink`](crate::driver::RowSink) callbacks can only return a
@@ -129,7 +129,9 @@ pub struct Exporter {
     inner: Backend,
     /// Total data rows written so far.
     rows_written: u64,
-    /// `true` once result set 0's metadata has been seen. Late sets and any
+    /// The `set_index` to record; every other set is ignored.
+    set: usize,
+    /// `true` once the chosen set's metadata has been seen. Other sets and any
     /// rows arriving before metadata are ignored.
     started: bool,
     /// The first error encountered while writing header/rows, if any. Held here
@@ -169,9 +171,16 @@ impl Exporter {
         Ok(Self {
             inner,
             rows_written: 0,
+            set: 0,
             started: false,
             failure: None,
         })
+    }
+
+    /// Record result set `set_index` instead of the first one.
+    pub fn with_set(mut self, set_index: usize) -> Self {
+        self.set = set_index;
+        self
     }
 
     /// Flush and close the output, returning a summary. For XLSX this is where
@@ -204,8 +213,8 @@ impl RowSink for Exporter {
         if self.failure.is_some() {
             return Flow::Stop;
         }
-        // Only the first result set is exported; record its header once.
-        if set_index == 0 && !self.started {
+        // Only the chosen result set is exported; record its header once.
+        if set_index == self.set && !self.started {
             self.started = true;
             if let Err(e) = self.write_header(&columns) {
                 // Stash the error for `finish` to surface, then stop the stream.
@@ -220,9 +229,9 @@ impl RowSink for Exporter {
         if self.failure.is_some() {
             return Flow::Stop;
         }
-        // Ignore rows for any set other than the first, and any rows that
+        // Ignore rows for any set other than the chosen one, and any rows that
         // somehow precede metadata.
-        if set_index != 0 || !self.started {
+        if set_index != self.set || !self.started {
             return Flow::Continue;
         }
         for row in &rows {
@@ -570,6 +579,26 @@ id,amount,blob,ts,geo
         let summary = exp.finish().unwrap();
         assert_eq!(summary.rows_written, 1, "only set 0's row counts");
         assert_eq!(read_to_string(tmp.path()), "a\n1\n");
+    }
+
+    #[tokio::test]
+    async fn with_set_exports_only_the_chosen_result_set() {
+        // Three sets; picking set 1 must write its header + rows only.
+        let tmp = NamedTempFile::new().unwrap();
+        let mut exp = Exporter::create(ExportFormat::Csv, tmp.path(), test_csv_opts())
+            .unwrap()
+            .with_set(1);
+
+        for (set, name, value) in [(0, "a", 1), (1, "b", 2), (2, "c", 3)] {
+            exp.on_meta(set, vec![col(name, 0, LogicalType::Integer)])
+                .await;
+            exp.on_rows(set, vec![vec![CellValue::I64(value)]]).await;
+            exp.on_set_end(set, None).await;
+        }
+
+        let summary = exp.finish().unwrap();
+        assert_eq!(summary.rows_written, 1);
+        assert_eq!(read_to_string(tmp.path()), "b\n2\n");
     }
 
     #[tokio::test]
