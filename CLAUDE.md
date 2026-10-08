@@ -402,9 +402,10 @@ touch no code (questions, exploration) need no branch.
   - `integration.yml` — dockerized MSSQL integration tests
     (`cargo test -p selene-core --features mssql -- --ignored`), nightly + manual
     `workflow_dispatch`. Kept off the per-PR path to keep PR feedback fast.
-  - `build.yml` — builds the Windows + macOS bundles on `workflow_dispatch` and
-    on any pushed `v*` tag; on a tag ref it also attaches the `.exe`/`.dmg` to
-    that tag's GitHub Release.
+  - `build.yml` — builds the Windows + macOS bundles on `workflow_dispatch`;
+    on a tag ref (the release job's dispatch) it also attaches the `.exe`/`.dmg`
+    to that tag's GitHub Release. There is deliberately **no tag trigger** (see
+    below); a hand-pushed tag builds with `gh workflow run build.yml --ref vX.Y.Z`.
 - **Releasing is automatic: every merge to `main` is a release.** The
   **Release** job in `ci.yml` runs after Frontend + Rust on each push to `main`
   (its own non-cancelling `release` concurrency group, and the workflow never
@@ -418,12 +419,22 @@ touch no code (questions, exploration) need no branch.
   `sync-version.sh --set` and `cargo update --workspace` (Cargo.lock), commits
   `Release vX.Y.Z [skip ci]` to `main` as `github-actions[bot]`, pushes it with
   the annotated tag `vX.Y.Z` (`--atomic`), creates the GitHub Release with the
-  section as notes, and dispatches `build.yml` on the tag.
-  - **Deploy key:** `main`'s ruleset only accepts PRs, and `GITHUB_TOKEN` can't
-    bypass it, so the job checks out and pushes with a write deploy key (secret
-    `RELEASE_DEPLOY_KEY`; the ruleset has a `DeployKey` bypass). A deploy-key
-    push does trigger workflows: `[skip ci]` stops it re-running CI and firing
-    `build.yml`'s tag trigger, hence the explicit dispatch.
+  section as notes, and dispatches `build.yml` on the tag — the one installer
+  build per release.
+  - **Release push = deploy key.** `main`'s ruleset (PR required, linear
+    history, no force-push/deletion) can only be bypassed by the admin role and
+    `DeployKey`; GitHub refuses the Actions app as a bypass actor on a
+    user-owned repo, so a `GITHUB_TOKEN` push is rejected with `GH013`. The job
+    checks out with `ssh-key: secrets.RELEASE_DEPLOY_KEY` (the private half of a
+    write-enabled deploy key; the owner creates both) and pushes over SSH. Its
+    first step fails with an `::error::` naming the setup commands when the
+    secret is missing. A deploy-key push, unlike a `GITHUB_TOKEN` one, *does*
+    trigger workflows: `[skip ci]` keeps the release commit from re-running
+    `ci.yml`, and since GitHub's docs don't say whether it also covers the tag
+    in the same push, `build.yml` has no tag trigger at all — the explicit
+    dispatch is the only build, so a release gets exactly one. Rotating the key
+    = new deploy key + `gh secret set RELEASE_DEPLOY_KEY`, then delete the old
+    key.
   - **Never bump the version or create a tag by hand**; `just version` is for
     emergencies only.
 - **Not yet set up:** Conventional Commits, pre-commit hooks,
