@@ -112,6 +112,7 @@ Selene/
 ├─ Cargo.toml                  # [workspace]; [workspace.package] version is the source of truth
 ├─ justfile                    # dev/build/test/lint/format/version recipes
 ├─ scripts/sync-version.sh     # propagates the version to tauri.conf.json + package.json
+├─ scripts/{next-version,changelog}.sh  # CI release helpers (+ *.test.sh)
 ├─ crates/selene-core/src/
 │  ├─ value.rs                 # CellValue, Column, LogicalType, TemporalKind (driver-neutral)
 │  ├─ connection_spec.rs       # ConnectionSpec, AuthMethod (open enum), DriverId, TlsConfig
@@ -250,7 +251,7 @@ just test-core      # selene-core unit tests
 just test-integration  # dockerized-MSSQL integration tests (Docker required)
 just lint           # clippy -D warnings (+ frontend lint)
 just format         # rustfmt (+ prettier)
-just version 1.1.0  # bump + sync version across all manifests
+just version 1.1.0  # bump + sync version across all manifests (emergencies only; CI bumps on merge)
 just version-check  # verify versions are in sync
 ```
 
@@ -361,8 +362,8 @@ own keychain items silently, so end users never see it.
 
 The repo is on GitHub (`RobbieMinderhoud/Selene`); use the **`gh` CLI** for PRs.
 **Every code change goes through a branch → PR** — do not commit straight to
-`main`. `main` stays releasable; each change merges via a PR and is eventually
-released (see _Versioning_). We do **not** open a GitHub issue per change: the PR
+`main`. `main` stays releasable; every merged PR is released automatically
+(see _Versioning_). We do **not** open a GitHub issue per change: the PR
 is the unit of work (title + body capture the what and why). Conversations that
 touch no code (questions, exploration) need no branch.
 
@@ -372,11 +373,13 @@ touch no code (questions, exploration) need no branch.
    imperative (Keep-a-Changelog voice). Per the global rule, **never add a
    `Co-Authored-By` trailer** (a `commit-msg` hook also strips Anthropic ones).
 3. **PR** — `gh pr create --base main --fill` (or with an explicit title/body).
-   The body carries the context an issue used to; no `Closes #…` needed.
-4. **Merge + release** — after the PR merges to `main`, cut the release with the
-   `release` skill (CHANGELOG entry, version bump + sync, then push & tag with
-   explicit approval). Pushing a `v*` tag triggers the GitHub Actions build of the
-   Windows/macOS bundles.
+   The body carries the context an issue used to; no `Closes #…` needed. The
+   PR must add its entry under `## [Unreleased]` in `CHANGELOG.md` (CI fails
+   without one).
+4. **Merge = release** — merging a PR to `main` is the release; nobody bumps
+   the version or tags by hand. Before merging, set a `minor` or `major` label
+   if the change warrants more than a patch (`gh pr edit N --add-label minor`).
+   Get explicit user confirmation first, because merging publishes a release.
 
 ## Versioning
 
@@ -384,7 +387,11 @@ touch no code (questions, exploration) need no branch.
   single source of truth; `scripts/sync-version.sh` propagates it to
   `tauri.conf.json` and `package.json` (run `just version-check` to detect drift).
 - **`CHANGELOG.md`** follows _Keep a Changelog_ and lists **only functional
-  (user-facing) changes**.
+  (user-facing) changes**. Every PR adds its entry under `## [Unreleased]`;
+  the PR-only **Changelog** job in `ci.yml` fails unless the PR touches
+  `CHANGELOG.md` and that section holds at least one `- ` entry
+  (`scripts/changelog.sh unreleased`). It also runs the script tests
+  (`scripts/*.test.sh`).
 - **CI:** GitHub Actions workflows in `.github/workflows/`:
   - `ci.yml` — the test + lint pipeline. Runs on every pull request and push to
     `main`: a **Frontend** job (`prettier --check`, `eslint`, `tsc --noEmit`,
@@ -396,10 +403,31 @@ touch no code (questions, exploration) need no branch.
     (`cargo test -p selene-core --features mssql -- --ignored`), nightly + manual
     `workflow_dispatch`. Kept off the per-PR path to keep PR feedback fast.
   - `build.yml` — builds the Windows + macOS bundles on `workflow_dispatch` and
-    on any pushed `v*` tag.
-- **Not yet set up** (now that the repo is public on GitHub): Conventional Commits,
-  git-cliff changelog automation, pre-commit hooks, signed/notarized releases,
-  and auto-update. Do **not** create git tags without explicit user approval.
+    on any pushed `v*` tag; on a tag ref it also attaches the `.exe`/`.dmg` to
+    that tag's GitHub Release.
+- **Releasing is automatic: every merge to `main` is a release.** The
+  **Release** job in `ci.yml` runs after Frontend + Rust on each push to `main`
+  (its own non-cancelling `release` concurrency group, and the workflow never
+  cancels runs on `main`, so no merge is left without a version). It checks out
+  `main` itself, not the pushed sha, so a queued second run sees the first one's
+  bump; an empty `## [Unreleased]` means already released, and it exits.
+  Otherwise: the version is the latest `v*` tag bumped by
+  `scripts/next-version.sh` — **patch by default**, `minor`/`major` when the
+  merged PR carries that label (`major` wins). It renames `## [Unreleased]` to
+  `## [X.Y.Z] - date` (`scripts/changelog.sh release`), runs
+  `sync-version.sh --set` and `cargo update --workspace` (Cargo.lock), commits
+  `Release vX.Y.Z [skip ci]` to `main` as `github-actions[bot]`, pushes it with
+  the annotated tag `vX.Y.Z` (`--atomic`), creates the GitHub Release with the
+  section as notes, and dispatches `build.yml` on the tag.
+  - **Deploy key:** `main`'s ruleset only accepts PRs, and `GITHUB_TOKEN` can't
+    bypass it, so the job checks out and pushes with a write deploy key (secret
+    `RELEASE_DEPLOY_KEY`; the ruleset has a `DeployKey` bypass). A deploy-key
+    push does trigger workflows: `[skip ci]` stops it re-running CI and firing
+    `build.yml`'s tag trigger, hence the explicit dispatch.
+  - **Never bump the version or create a tag by hand**; `just version` is for
+    emergencies only.
+- **Not yet set up:** Conventional Commits, pre-commit hooks,
+  signed/notarized releases, and auto-update.
 
 ## Roadmap (high level)
 
