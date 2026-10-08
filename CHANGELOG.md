@@ -10,6 +10,8 @@ when it merges.
 
 ## [Unreleased]
 
+## [1.4.15] - 2026-10-08
+
 ### Changed
 
 - **Every merge ships a release.** Each change that lands on `main` now becomes
