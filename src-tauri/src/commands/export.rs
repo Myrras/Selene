@@ -23,6 +23,7 @@ use selene_core::{
     ExportSummary, Exporter, Flow, RowSink,
 };
 
+use crate::commands::query::enforce_guard;
 use crate::commands::{first_byte, ExportEvent};
 use crate::error::IpcError;
 use crate::state::AppState;
@@ -155,6 +156,19 @@ pub async fn export_result(
         });
         err
     };
+
+    // Export re-runs `sql`, so enforce the same server-side guard as
+    // `query_run` (defence in depth; the UI prompts first) — before anything
+    // executes or the target file is created.
+    {
+        let handle = state
+            .sessions
+            .get(&session_id)
+            .map_err(|e| fail(&on_progress, e))?;
+        let session = handle.lock().await;
+        enforce_guard(&session_id, session.driver, &sql, session.read_only)
+            .map_err(|e| fail(&on_progress, e))?;
+    }
 
     let exporter = match Exporter::create(format, &target, csv_opts) {
         Ok(e) => e,

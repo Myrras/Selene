@@ -3,6 +3,9 @@
  *
  * - `block`: a non-dismissable-by-action message; the query does not run.
  * - `confirm`: lists the reasons and offers Run anyway / Cancel.
+ *
+ * `action="export"` rewords both for Export, which re-runs the batch
+ * server-side — so the user knows the flagged statements execute again.
  */
 
 import { useEffect, useRef } from "react";
@@ -19,9 +22,33 @@ interface GuardModalProps {
     | null;
   onConfirm: () => void;
   onCancel: () => void;
+  /** What the guarded batch is for; only changes the wording. */
+  action?: "run" | "export";
 }
 
-export function GuardModal({ state, onConfirm, onCancel }: GuardModalProps) {
+const COPY = {
+  run: {
+    confirmTitle: "Confirm potentially destructive SQL",
+    confirmLead: "The SQL guard flagged this batch. Review before running:",
+    confirmButton: "Run anyway",
+    blockLead: "The SQL guard refused to run this batch:",
+  },
+  export: {
+    confirmTitle: "Export re-runs this SQL",
+    confirmLead:
+      "Exporting executes the batch again, including the flagged statements. Review before exporting:",
+    confirmButton: "Re-run and export",
+    blockLead: "The SQL guard refused to re-run this batch for export:",
+  },
+} as const;
+
+export function GuardModal({
+  state,
+  onConfirm,
+  onCancel,
+  action = "run",
+}: GuardModalProps) {
+  const copy = COPY[action];
   // Retain the last verdict so the Modal can still animate out after the parent
   // clears `state` on resolve — otherwise it would unmount instantly. Updating
   // the ref during render is safe here: it's a pure function of the prop.
@@ -58,9 +85,7 @@ export function GuardModal({ state, onConfirm, onCancel }: GuardModalProps) {
   return (
     <Modal
       open={state !== null}
-      title={
-        isBlock ? "Statement blocked" : "Confirm potentially destructive SQL"
-      }
+      title={isBlock ? "Statement blocked" : copy.confirmTitle}
       tone={isBlock ? "danger" : "warning"}
       onClose={onCancel}
       footer={
@@ -74,16 +99,14 @@ export function GuardModal({ state, onConfirm, onCancel }: GuardModalProps) {
               Cancel
             </button>
             <button type="button" className="danger" onClick={onConfirm}>
-              Run anyway
+              {copy.confirmButton}
             </button>
           </>
         )
       }
     >
       <p className={styles.lead}>
-        {isBlock
-          ? "The SQL guard refused to run this batch:"
-          : "The SQL guard flagged this batch. Review before running:"}
+        {isBlock ? copy.blockLead : copy.confirmLead}
       </p>
       <ul className={styles.reasons}>
         {shown.verdict.reasons.length === 0 ? (

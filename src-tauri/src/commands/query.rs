@@ -119,6 +119,24 @@ pub async fn guard_check(
     })
 }
 
+/// The server-side guard shared by every command that executes user SQL on a
+/// session (`query_run`, and `export_result`, which re-runs the batch): a
+/// [`GuardLevel::Block`] verdict refuses execution. `Confirm` passes — the
+/// frontend prompts for it before invoking the command.
+pub(crate) fn enforce_guard(
+    session_id: &str,
+    driver: DriverId,
+    sql: &str,
+    read_only: bool,
+) -> Result<(), IpcError> {
+    let verdict = classify_for(driver, sql, read_only);
+    if verdict.level == GuardLevel::Block {
+        tracing::warn!(%session_id, "batch blocked by SQL guard");
+        return Err(IpcError::blocked(&verdict.reasons));
+    }
+    Ok(())
+}
+
 /// Run a SQL batch, streaming results to the frontend over `on_event`.
 ///
 /// Flow:
@@ -151,11 +169,7 @@ pub async fn query_run<R: Runtime>(
         (session.driver, session.read_only)
     };
 
-    let verdict = classify_for(driver, &sql, read_only);
-    if verdict.level == GuardLevel::Block {
-        tracing::warn!(%session_id, "query blocked by SQL guard");
-        return Err(IpcError::blocked(&verdict.reasons));
-    }
+    enforce_guard(&session_id, driver, &sql, read_only)?;
 
     // (2) Register a cancellation token and announce the query.
     let query_id = new_id();
@@ -391,4 +405,23 @@ pub async fn query_cancel(state: State<'_, AppState>, query_id: String) -> Resul
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enforce_guard_blocks_writes_on_read_only() {
+        let err = enforce_guard("s1", DriverId::Mssql, "DELETE FROM t WHERE id = 1", true)
+            .expect_err("a write on a read-only session must be blocked");
+        assert_eq!(err.kind, "blocked");
+    }
+
+    #[test]
+    fn enforce_guard_passes_reads_and_confirm_level_writes() {
+        assert!(enforce_guard("s1", DriverId::Mssql, "SELECT 1", true).is_ok());
+        // `Confirm` is a frontend prompt, not a server-side refusal.
+        assert!(enforce_guard("s1", DriverId::Mssql, "DELETE FROM t", false).is_ok());
+    }
 }

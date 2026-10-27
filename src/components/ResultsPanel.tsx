@@ -6,20 +6,22 @@
  * affected-row count instead of a grid.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { exportResult } from "../ipc/commands";
 import { createExportChannel } from "../ipc/channels";
 import { asIpcError } from "../ipc/types";
-import type { ExportFormat } from "../ipc/types";
+import type { ExportFormat, GuardVerdict } from "../ipc/types";
 import { formatElapsed } from "../lib/elapsed";
 import { isMac } from "../lib/platform";
+import { passGuard } from "../lib/runQuery";
 import { useEditorStore } from "../state/editorStore";
 import type { ResultState } from "../state/editorStore";
 import { selectSession, useSessionStore } from "../state/sessionStore";
 import { useSettingsStore } from "../state/settingsStore";
 import type { CsvOptions } from "../ipc/types";
 import { toastError, useToastStore } from "../state/toastStore";
+import { GuardModal } from "./GuardModal";
 import { DropdownIcon } from "./icons";
 import { ResultsGrid } from "./ResultsGrid";
 import styles from "./ResultsPanel.module.css";
@@ -46,6 +48,20 @@ export function ResultsPanel({ tabId }: ResultsPanelProps) {
 
   const exportSettings = useSettingsStore((s) => s.export);
   const [exportOpen, setExportOpen] = useState(false);
+  // Export re-runs the SQL, so it passes the same guard as Run; this holds the
+  // pending confirm/block prompt and the resolver for an in-flight confirm.
+  const [guard, setGuard] = useState<
+    | { kind: "confirm"; verdict: GuardVerdict }
+    | { kind: "block"; verdict: GuardVerdict }
+    | null
+  >(null);
+  const confirmResolver = useRef<((ok: boolean) => void) | null>(null);
+
+  function resolveConfirm(ok: boolean) {
+    setGuard(null);
+    confirmResolver.current?.(ok);
+    confirmResolver.current = null;
+  }
 
   if (!result || result.status === "idle") {
     return (
@@ -69,6 +85,21 @@ export function ResultsPanel({ tabId }: ResultsPanelProps) {
       toastError("Nothing to export", "Connect and run a query first.");
       return;
     }
+    // The re-run executes every statement in `sql` again (writes included), so
+    // gate it exactly like Run: block, confirm, or confirm-on-read-write.
+    const live = useSessionStore.getState().sessions[tab.sessionId];
+    const proceed = await passGuard({
+      sql,
+      readOnly: live?.readOnly ?? false,
+      driver: live?.info.driver,
+      onBlock: (verdict) => setGuard({ kind: "block", verdict }),
+      onConfirm: (verdict) =>
+        new Promise<boolean>((resolve) => {
+          confirmResolver.current = resolve;
+          setGuard({ kind: "confirm", verdict });
+        }),
+    });
+    if (!proceed) return;
     const fmt = EXPORT_FORMATS.find((f) => f.format === format)!;
     const { save } = await import("@tauri-apps/plugin-dialog");
 
@@ -246,6 +277,13 @@ export function ResultsPanel({ tabId }: ResultsPanelProps) {
         startedAt={result.startedAt}
         truncated={result.truncated}
         readOnly={session?.readOnly ?? false}
+      />
+
+      <GuardModal
+        state={guard}
+        action="export"
+        onConfirm={() => resolveConfirm(true)}
+        onCancel={() => resolveConfirm(false)}
       />
     </div>
   );
