@@ -4,9 +4,31 @@ All notable **functional** (user-facing) changes to Selene are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-Internal refactors, tooling, and chores are intentionally omitted. (Automated
-changelog generation from Conventional Commits via git-cliff is planned but not
-yet set up.)
+Internal refactors, tooling, and chores are intentionally omitted. Every pull
+request adds its entry under `## [Unreleased]`; the version number is assigned
+when it merges.
+
+## [Unreleased]
+
+## [1.4.15] - 2026-10-08
+
+### Changed
+
+- **Every merge ships a release.** Each change that lands on `main` now becomes
+  a numbered version right away, with downloadable macOS and Windows installers
+  attached to its GitHub Release — no more waiting for a release to be cut by
+  hand.
+
+## [1.4.14] - 2026-09-30
+
+### Fixed
+
+- **Export now writes the result tab you have selected.** When a query returns
+  several result sets, exporting from "Result 2" or later still wrote the rows
+  of the *first* result. Export now writes the result set on screen, in CSV,
+  JSON and Excel alike. If re-running the query for the export no longer
+  produces that result set, the export fails with a message instead of saving
+  an empty file.
 
 ## [1.4.13] - 2026-09-21
 
