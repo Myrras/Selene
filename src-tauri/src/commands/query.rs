@@ -31,7 +31,7 @@ use selene_core::{
 
 use crate::commands::QueryEvent;
 use crate::error::IpcError;
-use crate::state::{new_id, AppState};
+use crate::state::{new_id, AppState, SessionEntry, SessionHandle};
 
 /// Default cap on rows streamed when the caller does not specify `maxRows`.
 /// Mirrors [`ExecOptions::default`]'s cap so behaviour is consistent whether or
@@ -146,10 +146,8 @@ pub async fn query_run<R: Runtime>(
     //     driver selects the classifier: MongoDB queries are mongosh method calls,
     //     not SQL, so `classify_for` routes them through the Mongo guard.
     let (driver, read_only) = {
-        let sessions = state.sessions.lock().await;
-        let session = sessions
-            .get(&session_id)
-            .ok_or_else(|| IpcError::unknown_session(&session_id))?;
+        let session = state.sessions.get(&session_id)?;
+        let session = session.lock().await;
         (session.driver, session.read_only)
     };
 
@@ -230,27 +228,25 @@ async fn run_query_task<R: Runtime>(
     let started = Instant::now();
     let mut sink = ChannelSink::new(on_event.clone());
 
-    // Lock the session for the duration of the query. Concurrent queries on the
-    // *same* session serialize here (documented v0.1 behaviour); different
-    // sessions run in parallel.
-    let result = {
-        let mut sessions = state.sessions.lock().await;
-        match sessions.get_mut(&session_id) {
-            Some(session) => {
-                let result = session.conn.execute(&sql, &opts, &mut sink, &cancel).await;
-                if matches!(result, Err(selene_core::CoreError::Cancelled)) {
-                    // The cancel abandoned the wire conversation mid-stream:
-                    // the server may still be executing and the connection's
-                    // protocol state is undefined. Replace it (still under the
-                    // lock, so nothing can touch the dead connection first).
-                    refresh_session_connection(&app, &mut sessions, &session_id).await;
-                }
-                result
+    // Lock only *this* session for the duration of the query. Concurrent
+    // queries on the same session serialize here; other sessions (and new
+    // connects) are unaffected.
+    let result = match state.sessions.get(&session_id) {
+        Ok(handle) => {
+            let mut session = handle.lock().await;
+            let result = session.conn.execute(&sql, &opts, &mut sink, &cancel).await;
+            if matches!(result, Err(selene_core::CoreError::Cancelled)) {
+                // The cancel abandoned the wire conversation mid-stream: the
+                // server may still be executing and the connection's protocol
+                // state is undefined. Replace it (still under the session lock,
+                // so nothing can touch the dead connection first).
+                refresh_session_connection(&app, &handle, &mut session, &session_id).await;
             }
-            None => Err(selene_core::CoreError::Config(format!(
-                "session '{session_id}' disconnected before the query ran"
-            ))),
+            result
         }
+        Err(_) => Err(selene_core::CoreError::Config(format!(
+            "session '{session_id}' disconnected before the query ran"
+        ))),
     };
 
     let elapsed_ms = started.elapsed().as_millis() as u64;
@@ -304,18 +300,24 @@ async fn run_query_task<R: Runtime>(
 /// server abort the still-running query. If the reconnect fails the session is
 /// removed and `session:lost` is emitted, reusing the health heartbeat's
 /// recovery flow (the UI offers a reconnect).
+///
+/// `entry` is the locked session behind `handle`. If the session was
+/// disconnected while the query ran, there is nothing to repair: the orphaned
+/// connection is closed when the last handle drops.
 async fn refresh_session_connection<R: Runtime>(
     app: &AppHandle<R>,
-    sessions: &mut std::collections::HashMap<String, crate::state::SessionEntry>,
+    handle: &SessionHandle,
+    entry: &mut SessionEntry,
     session_id: &str,
 ) {
     use tauri::{Emitter, Manager};
     let state = app.state::<AppState>();
 
-    let (connection_id, current_database) = match sessions.get(session_id) {
-        Some(entry) => (entry.connection_id.clone(), entry.current_database.clone()),
-        None => return,
-    };
+    if !state.sessions.is_current(session_id, handle) {
+        return;
+    }
+    let connection_id = entry.connection_id.clone();
+    let current_database = entry.current_database.clone();
 
     let fresh = async {
         let spec = state.store.get(&connection_id)?.ok_or_else(|| {
@@ -343,14 +345,16 @@ async fn refresh_session_connection<R: Runtime>(
 
     match fresh {
         Ok(conn) => {
-            if let Some(entry) = sessions.get_mut(session_id) {
-                entry.conn = conn;
-                tracing::info!(%session_id, "connection replaced after cancelled query");
-            }
+            entry.conn = conn;
+            tracing::info!(%session_id, "connection replaced after cancelled query");
         }
         Err(err) => {
             tracing::warn!(%session_id, "reconnect after cancelled query failed: {err}; closing session");
-            sessions.remove(session_id);
+            // Only report the loss if the session was still registered (a
+            // disconnect meanwhile already tore it down on the frontend).
+            if !state.sessions.remove_if_current(session_id, handle) {
+                return;
+            }
             let _ = app.emit(
                 "session:lost",
                 super::health::SessionLost {

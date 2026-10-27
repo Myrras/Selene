@@ -11,14 +11,25 @@
 //!   place a connection password is read or written.
 //! - the live sessions map and the running-query token map.
 //!
-//! ## Concurrency model (v0.1)
-//! Each connected session owns exactly one live [`Connection`], guarded by a
-//! `tokio::sync::Mutex`. Two queries issued against the *same* session
-//! therefore serialize behind that mutex — a deliberate v0.1 simplification (a
-//! per-connection pool that runs them in parallel is deferred). Queries on
-//! *different* sessions run concurrently. The async mutex (not `std::sync`) is
-//! required because the lock is held across `.await` points while a query
-//! streams.
+//! ## Concurrency model
+//! Each connected session owns exactly one live [`Connection`], guarded by its
+//! **own** `tokio::sync::Mutex` ([`SessionHandle`]). The [`Sessions`] map that
+//! holds those handles sits behind a plain `std::sync::Mutex` that is only ever
+//! locked briefly to insert, look up (clone the `Arc`), or remove a handle —
+//! never across an `.await`. So:
+//!
+//! - work on *different* sessions (a long query in one tab, connecting or
+//!   browsing the schema in another) runs concurrently, and connecting a new
+//!   session never waits on a busy one;
+//! - two operations on the *same* session serialize behind that session's lock
+//!   (one connection carries one conversation at a time; a per-connection pool
+//!   that runs them in parallel is deferred).
+//!
+//! The per-session lock is async (not `std::sync`) because it is held across
+//! `.await` points while a query streams. Removing a session from the map (a
+//! disconnect, or the heartbeat evicting a dead link) does not wait for an
+//! in-flight operation: that operation keeps its cloned handle, and the
+//! connection is dropped (closed) when the last handle goes away.
 
 use std::collections::HashMap;
 use std::fs;
@@ -33,6 +44,8 @@ use selene_core::{
     CancelToken, Connection, ConnectionSpec, CoreError, DriverCapabilities, DriverId,
     KeychainStore, Secret,
 };
+
+use crate::error::IpcError;
 
 /// Pause/resume coordination for one in-flight multi-target run.
 ///
@@ -243,8 +256,84 @@ pub struct SessionEntry {
     /// latter is called by the frontend after every finished query, which also
     /// picks up `USE` statements inside batches).
     pub current_database: Option<String>,
-    /// The live connection. Guarded so it is driven from one task at a time.
+    /// The live connection. Guarded (by the [`SessionHandle`] mutex) so it is
+    /// driven from one task at a time.
     pub conn: Box<dyn Connection>,
+}
+
+/// Shared handle to one live session. Each session has its own async lock, so a
+/// long operation on one session never blocks another (see the module docs).
+pub type SessionHandle = Arc<AsyncMutex<SessionEntry>>;
+
+/// The live sessions, keyed by `session_id`.
+///
+/// The map itself is behind a plain `std::sync::Mutex` that is held only for a
+/// lookup/insert/remove (never across an `.await`); callers clone a
+/// [`SessionHandle`] out and lock *that* for the duration of their work.
+#[derive(Default)]
+pub struct Sessions {
+    map: Mutex<HashMap<String, SessionHandle>>,
+}
+
+impl Sessions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn map(&self) -> std::sync::MutexGuard<'_, HashMap<String, SessionHandle>> {
+        self.map.lock().expect("sessions map mutex poisoned")
+    }
+
+    /// Register a freshly connected session under `session_id`.
+    pub fn insert(&self, session_id: String, entry: SessionEntry) {
+        self.map()
+            .insert(session_id, Arc::new(AsyncMutex::new(entry)));
+    }
+
+    /// Clone out the handle for `session_id`, or an `unknown_session` error.
+    /// Lock the returned handle to use the connection.
+    pub fn get(&self, session_id: &str) -> Result<SessionHandle, IpcError> {
+        self.map()
+            .get(session_id)
+            .cloned()
+            .ok_or_else(|| IpcError::unknown_session(session_id))
+    }
+
+    /// Remove `session_id` from the map without waiting for any in-flight
+    /// operation on it. Returns whether it was present.
+    pub fn remove(&self, session_id: &str) -> bool {
+        self.map().remove(session_id).is_some()
+    }
+
+    /// Remove `session_id` only if it still maps to `handle` (pointer
+    /// equality), so a task acting on a stale handle can never evict a session
+    /// that was disconnected and replaced meanwhile. Returns whether it removed.
+    pub fn remove_if_current(&self, session_id: &str, handle: &SessionHandle) -> bool {
+        let mut map = self.map();
+        if map.get(session_id).is_some_and(|h| Arc::ptr_eq(h, handle)) {
+            map.remove(session_id);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Whether `session_id` still maps to `handle` (i.e. it was not
+    /// disconnected while the caller worked on it).
+    pub fn is_current(&self, session_id: &str, handle: &SessionHandle) -> bool {
+        self.map()
+            .get(session_id)
+            .is_some_and(|h| Arc::ptr_eq(h, handle))
+    }
+
+    /// A point-in-time copy of every `(session_id, handle)` pair, for callers
+    /// that iterate (the health heartbeat) without holding the map lock.
+    pub fn snapshot(&self) -> Vec<(String, SessionHandle)> {
+        self.map()
+            .iter()
+            .map(|(id, h)| (id.clone(), Arc::clone(h)))
+            .collect()
+    }
 }
 
 /// Runtime configuration for the connection health-check heartbeat.
@@ -273,8 +362,9 @@ impl Default for HealthConfig {
 /// The whole application's shared state.
 ///
 /// `AppState` is `Send + Sync` (every field is), as required by Tauri's
-/// `State<'_, T>`. `Box<dyn Connection>` is only `Send`, but it lives behind a
-/// `tokio::sync::Mutex`, which is `Sync` whenever its contents are `Send`.
+/// `State<'_, T>`. `Box<dyn Connection>` is only `Send`, but each one lives
+/// behind its session's `tokio::sync::Mutex`, which is `Sync` whenever its
+/// contents are `Send`.
 pub struct AppState {
     /// Persisted, non-secret connection specs.
     pub store: ConnectionStore,
@@ -297,8 +387,8 @@ pub struct AppState {
     /// Plain `std::sync::Mutex`: locked only briefly to read, insert, or remove
     /// a cloned `Secret`, never across an `.await`.
     pub secret_cache: Mutex<HashMap<String, Secret>>,
-    /// Live sessions keyed by `session_id`.
-    pub sessions: AsyncMutex<HashMap<String, SessionEntry>>,
+    /// Live sessions keyed by `session_id`, each behind its own lock.
+    pub sessions: Sessions,
     /// Cancellation tokens for in-flight queries, keyed by `query_id`. A plain
     /// `std::sync::Mutex` suffices: it is only ever locked briefly to insert,
     /// look up, or remove a cheap clone of a token, never across `.await`.
@@ -325,7 +415,7 @@ impl AppState {
             store: ConnectionStore::new(config_dir)?,
             keychain: KeychainStore::new(),
             secret_cache: Mutex::new(HashMap::new()),
-            sessions: AsyncMutex::new(HashMap::new()),
+            sessions: Sessions::new(),
             running: Mutex::new(HashMap::new()),
             multi_gates: Mutex::new(HashMap::new()),
             watcher: Mutex::new(None),
@@ -464,6 +554,120 @@ mod tests {
     #[test]
     fn new_id_is_unique() {
         assert_ne!(new_id(), new_id());
+    }
+
+    /// A connection that never touches a network: enough to populate a
+    /// [`SessionEntry`] for the session-map locking tests.
+    struct StubConn;
+
+    #[async_trait::async_trait]
+    impl Connection for StubConn {
+        async fn execute(
+            &mut self,
+            _sql: &str,
+            _opts: &selene_core::ExecOptions,
+            _sink: &mut dyn selene_core::RowSink,
+            _cancel: &CancelToken,
+        ) -> Result<selene_core::ExecOutcome, CoreError> {
+            Err(CoreError::Unsupported("stub".into()))
+        }
+        async fn list_databases(&mut self) -> Result<Vec<selene_core::DatabaseInfo>, CoreError> {
+            Ok(Vec::new())
+        }
+        async fn list_schemas(
+            &mut self,
+            _database: &str,
+        ) -> Result<Vec<selene_core::SchemaInfo>, CoreError> {
+            Ok(Vec::new())
+        }
+        async fn list_tables(
+            &mut self,
+            _database: &str,
+            _schema: &str,
+        ) -> Result<Vec<selene_core::TableInfo>, CoreError> {
+            Ok(Vec::new())
+        }
+        async fn list_columns(
+            &mut self,
+            _database: &str,
+            _schema: &str,
+            _table: &str,
+        ) -> Result<Vec<selene_core::ColumnInfo>, CoreError> {
+            Ok(Vec::new())
+        }
+        async fn ping(&mut self) -> Result<(), CoreError> {
+            Ok(())
+        }
+    }
+
+    fn entry(connection_id: &str) -> SessionEntry {
+        SessionEntry {
+            driver: DriverId::Mssql,
+            caps: DriverCapabilities::NONE,
+            connection_id: connection_id.to_string(),
+            read_only: false,
+            current_database: None,
+            conn: Box::new(StubConn),
+        }
+    }
+
+    /// The bug this guards: a long query held the one map-wide lock, so
+    /// connecting a new session (an insert) hung until the query finished.
+    #[tokio::test]
+    async fn busy_session_does_not_block_other_sessions() {
+        let sessions = Sessions::new();
+        sessions.insert("busy".into(), entry("c1"));
+
+        // Simulate a long-running query: hold the busy session's lock.
+        let busy = sessions.get("busy").unwrap();
+        let _query = busy.lock().await;
+
+        // Connecting another session and using it must not wait on it.
+        sessions.insert("fresh".into(), entry("c2"));
+        let fresh = sessions.get("fresh").unwrap();
+        let mut guard = tokio::time::timeout(Duration::from_secs(1), fresh.lock())
+            .await
+            .expect("locking another session must not wait on a busy one");
+        guard.conn.ping().await.unwrap();
+        assert_eq!(guard.connection_id, "c2");
+
+        // The busy session is visibly busy (the heartbeat skips it this way).
+        assert!(busy.try_lock().is_err());
+    }
+
+    #[tokio::test]
+    async fn disconnect_does_not_wait_for_in_flight_work() {
+        let sessions = Sessions::new();
+        sessions.insert("s".into(), entry("c1"));
+        let handle = sessions.get("s").unwrap();
+        let held = handle.lock().await;
+
+        // Removing returns immediately even though the session is locked; the
+        // in-flight holder keeps its entry until it finishes.
+        assert!(sessions.remove("s"));
+        assert!(
+            matches!(sessions.get("s"), Err(e) if e.kind == "unknown_session"),
+            "a removed session is no longer addressable"
+        );
+        assert_eq!(held.connection_id, "c1");
+        assert!(!sessions.remove("s"), "removing again is a no-op");
+    }
+
+    #[test]
+    fn remove_if_current_ignores_a_stale_handle() {
+        let sessions = Sessions::new();
+        sessions.insert("s".into(), entry("old"));
+        let stale = sessions.get("s").unwrap();
+
+        // The id is re-registered with a different session meanwhile.
+        sessions.insert("s".into(), entry("new"));
+        assert!(!sessions.is_current("s", &stale));
+        assert!(!sessions.remove_if_current("s", &stale));
+        assert!(sessions.get("s").is_ok(), "the newer session must survive");
+
+        let current = sessions.get("s").unwrap();
+        assert!(sessions.remove_if_current("s", &current));
+        assert!(sessions.snapshot().is_empty());
     }
 
     #[test]

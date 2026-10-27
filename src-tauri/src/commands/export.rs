@@ -165,15 +165,15 @@ pub async fn export_result(
     let mut sink = ProgressSink::new(exporter, on_progress.clone());
 
     // Execute into the progress sink. The session is locked for the duration,
-    // serializing with any concurrent query on the same session (v0.1).
+    // serializing with any concurrent query on the same session; other sessions
+    // are unaffected.
     let exec_result = {
-        let mut sessions = state.sessions.lock().await;
-        match sessions.get_mut(&session_id) {
-            Some(session) => session.conn.execute(&sql, &opts, &mut sink, &cancel).await,
-            None => {
-                return Err(fail(&on_progress, IpcError::unknown_session(&session_id)));
-            }
-        }
+        let handle = match state.sessions.get(&session_id) {
+            Ok(h) => h,
+            Err(e) => return Err(fail(&on_progress, e)),
+        };
+        let mut session = handle.lock().await;
+        session.conn.execute(&sql, &opts, &mut sink, &cancel).await
     };
 
     // Recover the exporter to flush/close it. `finish` re-raises any write error
