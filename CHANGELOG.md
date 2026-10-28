@@ -10,6 +10,8 @@ when it merges.
 
 ## [Unreleased]
 
+## [1.4.17] - 2026-10-28
+
 ### Fixed
 
 - **Connecting no longer waits for a query in another tab.** Opening a
