@@ -29,7 +29,8 @@ dev:
 # to use a different name, edit src-tauri/tauri.dev-signed.conf.json.
 
 # Build + launch a debug .app signed with a STABLE self-signed cert (macOS).
-dev-signed: _signed-conf
+dev-signed:
+    @just _signed-conf
     pnpm tauri build --debug --bundles app --config src-tauri/tauri.dev-signed.conf.json
     @just sweep
     open "$CARGO_TARGET_DIR/debug/bundle/macos/Selene.app"
@@ -45,7 +46,8 @@ build:
     @just sweep
 
 # Build the signed release and copy it straight into /Applications.
-install-signed: build-signed
+install-signed:
+    @just build-signed
     rm -rf "/Applications/Selene.app"
     cp -R "$CARGO_TARGET_DIR/release/bundle/macos/Selene.app" "/Applications/Selene.app"
     @echo "Installed → /Applications/Selene.app"
