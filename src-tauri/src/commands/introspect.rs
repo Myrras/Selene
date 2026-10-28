@@ -18,10 +18,8 @@ pub async fn databases_list(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<Vec<DatabaseInfo>, IpcError> {
-    let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&session_id)
-        .ok_or_else(|| IpcError::unknown_session(&session_id))?;
+    let session = state.sessions.get(&session_id)?;
+    let mut session = session.lock().await;
     let out = session.conn.list_databases().await?;
     tracing::info!(%session_id, count = out.len(), "listed databases");
     Ok(out)
@@ -34,10 +32,8 @@ pub async fn schemas_list(
     session_id: String,
     database: String,
 ) -> Result<Vec<SchemaInfo>, IpcError> {
-    let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&session_id)
-        .ok_or_else(|| IpcError::unknown_session(&session_id))?;
+    let session = state.sessions.get(&session_id)?;
+    let mut session = session.lock().await;
     let out = session.conn.list_schemas(&database).await?;
     tracing::info!(%session_id, count = out.len(), "listed schemas");
     Ok(out)
@@ -51,10 +47,8 @@ pub async fn tables_list(
     database: String,
     schema: String,
 ) -> Result<Vec<TableInfo>, IpcError> {
-    let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&session_id)
-        .ok_or_else(|| IpcError::unknown_session(&session_id))?;
+    let session = state.sessions.get(&session_id)?;
+    let mut session = session.lock().await;
     let out = session.conn.list_tables(&database, &schema).await?;
     tracing::info!(%session_id, count = out.len(), "listed tables");
     Ok(out)
@@ -69,10 +63,8 @@ pub async fn columns_list(
     schema: String,
     table: String,
 ) -> Result<Vec<ColumnInfo>, IpcError> {
-    let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&session_id)
-        .ok_or_else(|| IpcError::unknown_session(&session_id))?;
+    let session = state.sessions.get(&session_id)?;
+    let mut session = session.lock().await;
     let out = session
         .conn
         .list_columns(&database, &schema, &table)
