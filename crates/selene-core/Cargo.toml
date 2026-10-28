@@ -78,7 +78,7 @@ keyring = { version = "3", features = [
 csv = "1.4"
 chardetng = "1"
 encoding_rs = "0.8"
-rust_xlsxwriter = "0.95"
+rust_xlsxwriter = "0.101"
 chrono = { workspace = true }
 
 # --- MSSQL driver (feature = "mssql") -------------------------------------
@@ -90,7 +90,7 @@ chrono = { workspace = true }
 # `connection closed via error` — see the integration tests in
 # `tests/mssql_integration.rs`. rustls connects successfully and is the same
 # pure-Rust stack across macOS/Windows/Linux.
-tiberius = { version = "0.12", default-features = false, features = [
+tiberius = { version = "0.13", default-features = false, features = [
     "tds73",
     "rustls",
     "sql-browser-tokio",
@@ -104,14 +104,14 @@ uuid = { workspace = true, optional = true }
 # (Wi-Fi/VPN gone, no RST) surfaces as a socket error within seconds instead of
 # blocking a read forever — see `open_client`. socket2 is the cross-platform
 # way to reach the keepalive socket options behind tokio's `TcpStream`.
-socket2 = { version = "0.5", optional = true }
+socket2 = { version = "0.6", optional = true }
 
 # --- sqlx drivers (features postgres/mysql/sqlite via `_sqlx-common`) -------
 # Default features are off; the runtime, TLS backend, and per-type decoders are
 # opted into through `_sqlx-common` above so a build only links what it uses.
 # `sqlx/sqlite` statically bundles the SQLite engine, so a desktop bundle needs
 # no system libsqlite3. `rust_decimal` backs lossless DECIMAL/NUMERIC handling.
-sqlx = { version = "0.8", default-features = false, optional = true }
+sqlx = { version = "0.9", default-features = false, optional = true }
 rust_decimal = { version = "1", optional = true }
 
 # --- MongoDB driver (feature = "mongodb") ---------------------------------
@@ -129,7 +129,7 @@ mongodb = { version = "3", default-features = false, features = [
     "compat-3-3-0",
     "dns-resolver",
 ], optional = true }
-bson = { version = "2", optional = true }
+bson = { version = "3", optional = true }
 
 [dev-dependencies]
 # Hermetic temp files for the export golden tests. `tokio` (with the `macros`
