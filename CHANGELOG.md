@@ -23,6 +23,14 @@ when it merges.
   After running a query, clicking into the editor could jump it to a different
   position. It now stays where you left it.
 
+## [1.4.16] - 2026-10-28
+
+### Changed
+
+- **Every pull request needs a release label.** Each PR must carry exactly one
+  of `patch`, `minor` or `major`. A `Release label` check fails the PR without
+  one, and the label sets the version bump when the PR merges.
+
 ## [1.4.15] - 2026-10-08
 
 ### Changed
