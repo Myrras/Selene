@@ -10,6 +10,12 @@ when it merges.
 
 ## [Unreleased]
 
+### Changed
+
+- **CI now uses the shared workflows from ci-workflows.** Checks, release and
+  installer builds are unchanged for contributors; the macOS installer is now
+  packaged as an APFS disk image.
+
 ## [1.4.17] - 2026-10-28
 
 ### Fixed
