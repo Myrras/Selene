@@ -377,8 +377,9 @@ touch no code (questions, exploration) need no branch.
    PR must add its entry under `## [Unreleased]` in `CHANGELOG.md` (CI fails
    without one).
 4. **Merge = release** — merging a PR to `main` is the release; nobody bumps
-   the version or tags by hand. Before merging, set a `minor` or `major` label
-   if the change warrants more than a patch (`gh pr edit N --add-label minor`).
+   the version or tags by hand. Every PR needs exactly one of the labels
+   `patch`, `minor` or `major` (`gh pr edit N --add-label minor`), enforced by
+   the `Release label` check.
    Get explicit user confirmation first, because merging publishes a release.
 
 ## Versioning
@@ -399,6 +400,9 @@ touch no code (questions, exploration) need no branch.
     `clippy -D warnings`, `cargo test --workspace`, with the Tauri Linux system
     deps + a stub `dist/` so `src-tauri` compiles). Both checks are required to
     merge (branch protection on `main`).
+  - `release-label.yml` — the `Release label` check: fails unless the PR has
+    exactly one of `patch`, `minor`, `major`. Separate from `ci.yml` so labeling
+    doesn't re-run the pipeline.
   - `integration.yml` — dockerized MSSQL integration tests
     (`cargo test -p selene-core --features mssql -- --ignored`), nightly + manual
     `workflow_dispatch`. Kept off the per-PR path to keep PR feedback fast.
@@ -413,8 +417,8 @@ touch no code (questions, exploration) need no branch.
   `main` itself, not the pushed sha, so a queued second run sees the first one's
   bump; an empty `## [Unreleased]` means already released, and it exits.
   Otherwise: the version is the latest `v*` tag bumped by
-  `scripts/next-version.sh` — **patch by default**, `minor`/`major` when the
-  merged PR carries that label (`major` wins). It renames `## [Unreleased]` to
+  `scripts/next-version.sh` — the bump comes from the merged PR's
+  `patch`/`minor`/`major` label (`major` wins; patch if there is no PR). It renames `## [Unreleased]` to
   `## [X.Y.Z] - date` (`scripts/changelog.sh release`), runs
   `sync-version.sh --set` and `cargo update --workspace` (Cargo.lock), commits
   `Release vX.Y.Z [skip ci]` to `main` as `github-actions[bot]`, pushes it with
