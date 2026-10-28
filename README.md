@@ -8,7 +8,7 @@ Rust does all DB/query/export logic; the web layer is presentation only.
 
 ## Quick start
 
-Prereqs: Rust (stable), Node 20+, pnpm, [`just`](https://github.com/casey/just).
+Prereqs: Rust (stable), Node 20+, pnpm, [`just`](https://github.com/casey/just), and a clone of `RobbieMinderhoud/ci-workflows` symlinked as `~/.ci-workflows` (shared recipes such as `just ci`, and the version scripts).
 
 ```sh
 pnpm install
@@ -20,12 +20,12 @@ just dev          # Vite dev server + Tauri, hot reload
 ```
 just dev               run the app (hot reload)
 just build             production desktop bundle
+just ci                the full CI checks locally (shared recipe)
 just check             cargo check --workspace
-just test              all tests (Rust + frontend)
 just test-core         core unit tests
-just test-integration  dockerized-MSSQL tests (needs Docker)
-just lint              clippy (warnings = errors)
-just format            rustfmt (+ prettier)
+just drivers-check     clippy + tests for the sqlite/postgres/mysql/mongodb drivers
+just test-integration  dockerized driver integration tests (needs Docker)
+just format            rustfmt + prettier
 just version 0.2.0     bump + sync version across manifests
 ```
 

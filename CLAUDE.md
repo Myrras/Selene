@@ -17,7 +17,7 @@ slot in later without rework. macOS-first; Windows/Linux kept in mind.
 
 Selene's shared skeleton — the Cargo workspace shape (a `*-core` crate with
 zero Tauri dependency + a thin `src-tauri` IPC layer + a presentation-only
-React frontend), the `justfile`, `scripts/sync-version.sh`, CI, the shared
+React frontend), the `justfile`, the shared CI (`ci-workflows`), the shared
 config files, the design tokens, and the layering/IPC conventions — is
 extracted into a standalone template:
 
@@ -110,9 +110,7 @@ layer for file-backed tabs). `src/` is the React app.
 ```
 Selene/
 ├─ Cargo.toml                  # [workspace]; [workspace.package] version is the source of truth
-├─ justfile                    # dev/build/test/lint/format/version recipes
-├─ scripts/sync-version.sh     # propagates the version to tauri.conf.json + package.json
-├─ scripts/{next-version,changelog}.sh  # CI release helpers (+ *.test.sh)
+├─ justfile                    # dev/build/test/format/version recipes; imports shared common.just
 ├─ crates/selene-core/src/
 │  ├─ value.rs                 # CellValue, Column, LogicalType, TemporalKind (driver-neutral)
 │  ├─ connection_spec.rs       # ConnectionSpec, AuthMethod (open enum), DriverId, TlsConfig
@@ -242,15 +240,21 @@ non-SELECT on a read-only connection) is refused before execution.
 Prefer `just` (run `just` to list recipes). The Tauri CLI is provided by the
 local `@tauri-apps/cli` dev-dependency, so use `pnpm tauri …` (no global install).
 
+Shared recipes (`ci`, `rust`, `frontend`, `build-signed`, `sweep`) live in
+`common.just` of `RobbieMinderhoud/ci-workflows`, imported by the justfile from
+`~/.ci-workflows` (`ln -s /path/to/ci-workflows ~/.ci-workflows`). Without that
+symlink those recipes are missing. The version and release scripts are shared
+too: `~/.ci-workflows/scripts/`.
+
 ```
 just dev            # run the app (Vite + Tauri, hot reload)
-just build          # production bundle
+just build          # production bundle (.app + APFS .dmg)
+just ci             # shared: the full CI pipeline locally (rust, then frontend)
 just check          # cargo check --workspace
-just test           # cargo test --workspace (+ frontend tests when present)
 just test-core      # selene-core unit tests
-just test-integration  # dockerized-MSSQL integration tests (Docker required)
-just lint           # clippy -D warnings (+ frontend lint)
-just format         # rustfmt (+ prettier)
+just drivers-check  # clippy + tests for the sqlite/postgres/mysql/mongodb features
+just test-integration  # dockerized MSSQL/PostgreSQL/MySQL/MongoDB tests (Docker required)
+just format         # rustfmt + prettier (writes)
 just version 1.1.0  # bump + sync version across all manifests (emergencies only; CI bumps on merge)
 just version-check  # verify versions are in sync
 ```
@@ -374,8 +378,9 @@ touch no code (questions, exploration) need no branch.
    `Co-Authored-By` trailer** (a `commit-msg` hook also strips Anthropic ones).
 3. **PR** — `gh pr create --base main --fill` (or with an explicit title/body).
    The body carries the context an issue used to; no `Closes #…` needed. The
-   PR must add its entry under `## [Unreleased]` in `CHANGELOG.md` (CI fails
-   without one).
+   PR must add its entry under `## [Unreleased]` in `CHANGELOG.md` (the
+   `pr-checks / Changelog entry` check fails without one). Add the `windows`
+   label when the change is Windows-sensitive (see _CI_ under _Versioning_).
 4. **Merge = release** — merging a PR to `main` is the release; nobody bumps
    the version or tags by hand. Every PR needs exactly one of the labels
    `patch`, `minor` or `major` (`gh pr edit N --add-label minor`), enforced by
@@ -385,62 +390,75 @@ touch no code (questions, exploration) need no branch.
 ## Versioning
 
 - **SemVer.** The `[workspace.package]` version in the root `Cargo.toml` is the
-  single source of truth; `scripts/sync-version.sh` propagates it to
+  single source of truth; `sync-version.sh` (shared) propagates it to
   `tauri.conf.json` and `package.json` (run `just version-check` to detect drift).
 - **`CHANGELOG.md`** follows _Keep a Changelog_ and lists **only functional
   (user-facing) changes**. Every PR adds its entry under `## [Unreleased]`;
-  the PR-only **Changelog** job in `ci.yml` fails unless the PR touches
-  `CHANGELOG.md` and that section holds at least one `- ` entry
-  (`scripts/changelog.sh unreleased`). It also runs the script tests
-  (`scripts/*.test.sh`).
-- **CI:** GitHub Actions workflows in `.github/workflows/`:
-  - `ci.yml` — the test + lint pipeline. Runs on every pull request and push to
-    `main`: a **Frontend** job (`prettier --check`, `eslint`, `tsc --noEmit`,
-    `vitest`, production `pnpm build`) and a **Rust** job (`cargo fmt --check`,
-    `clippy -D warnings`, `cargo test --workspace`, with the Tauri Linux system
-    deps + a stub `dist/` so `src-tauri` compiles). Both checks are required to
-    merge (branch protection on `main`).
-  - `release-label.yml` — the `Release label` check: fails unless the PR has
-    exactly one of `patch`, `minor`, `major`. Separate from `ci.yml` so labeling
-    doesn't re-run the pipeline.
-  - `integration.yml` — dockerized MSSQL integration tests
-    (`cargo test -p selene-core --features mssql -- --ignored`), nightly + manual
-    `workflow_dispatch`. Kept off the per-PR path to keep PR feedback fast.
-  - `build.yml` — builds the Windows + macOS bundles on `workflow_dispatch`;
-    on a tag ref (the release job's dispatch) it also attaches the `.exe`/`.dmg`
-    to that tag's GitHub Release. There is deliberately **no tag trigger** (see
-    below); a hand-pushed tag builds with `gh workflow run build.yml --ref vX.Y.Z`.
-- **Releasing is automatic: every merge to `main` is a release.** The
-  **Release** job in `ci.yml` runs after Frontend + Rust on each push to `main`
-  (its own non-cancelling `release` concurrency group, and the workflow never
-  cancels runs on `main`, so no merge is left without a version). It checks out
-  `main` itself, not the pushed sha, so a queued second run sees the first one's
-  bump; an empty `## [Unreleased]` means already released, and it exits.
-  Otherwise: the version is the latest `v*` tag bumped by
-  `scripts/next-version.sh` — the bump comes from the merged PR's
-  `patch`/`minor`/`major` label (`major` wins; patch if there is no PR). It renames `## [Unreleased]` to
-  `## [X.Y.Z] - date` (`scripts/changelog.sh release`), runs
-  `sync-version.sh --set` and `cargo update --workspace` (Cargo.lock), commits
-  `Release vX.Y.Z [skip ci]` to `main` as `github-actions[bot]`, pushes it with
-  the annotated tag `vX.Y.Z` (`--atomic`), creates the GitHub Release with the
-  section as notes, and dispatches `build.yml` on the tag — the one installer
-  build per release.
-  - **Release push = deploy key.** `main`'s ruleset (PR required, linear
-    history, no force-push/deletion) can only be bypassed by the admin role and
-    `DeployKey`; GitHub refuses the Actions app as a bypass actor on a
-    user-owned repo, so a `GITHUB_TOKEN` push is rejected with `GH013`. The job
-    checks out with `ssh-key: secrets.RELEASE_DEPLOY_KEY` (the private half of a
-    write-enabled deploy key; the owner creates both) and pushes over SSH. Its
-    first step fails with an `::error::` naming the setup commands when the
-    secret is missing. A deploy-key push, unlike a `GITHUB_TOKEN` one, *does*
-    trigger workflows: `[skip ci]` keeps the release commit from re-running
-    `ci.yml`, and since GitHub's docs don't say whether it also covers the tag
-    in the same push, `build.yml` has no tag trigger at all — the explicit
-    dispatch is the only build, so a release gets exactly one. Rotating the key
-    = new deploy key + `gh secret set RELEASE_DEPLOY_KEY`, then delete the old
-    key.
+  the shared `pr-checks / Changelog entry` check fails unless the PR touches
+  `CHANGELOG.md` and that section holds at least one `- ` entry. The heading
+  must stay exactly `## [Unreleased]`: the release fails without it.
+- **CI:** thin caller workflows in `.github/workflows/` over the shared
+  workflows in `RobbieMinderhoud/ci-workflows`, pinned `@v1`. Behaviour lives
+  in that repo; see its README. Selene's inputs:
+  - `ci.yml` — on pull requests and pushes to `main`: `tauri-ci.yml` (jobs
+    `frontend`, `rust` on ubuntu, `windows`, aggregate `ci-ok`) with
+    `windows-test-scope: -p selene-core` and `extra-recipe: drivers-check`
+    (clippy + tests for the sqlite/postgres/mysql/mongodb features), then, on
+    push to `main`, `release.yml` (`title-prefix: Selene`,
+    `require-deploy-key: true`).
+  - `pr-checks.yml` — `pr-checks / Changelog entry` and `pr-checks / Release
+    label` (exactly one of `patch`, `minor`, `major`). Separate from `ci.yml` so
+    labelling doesn't re-run the pipeline.
+  - `integration.yml` — nightly + manual `just test-integration` (MSSQL,
+    PostgreSQL, MySQL, MongoDB via testcontainers; `apt-packages: libdbus-1-dev
+    pkg-config` for keyring). The keychain test stays excluded.
+  - `build.yml` — dispatch only; `release.yml` dispatches it with `--ref <tag>`
+    and the installers (macOS `.dmg`, Windows NSIS `.exe`) are attached to that
+    tag's GitHub Release. A hand-pushed tag builds with
+    `gh workflow run build.yml --ref vX.Y.Z`. Must stay named `build.yml`.
+  - Required checks on `main`: `ci / ci-ok`, `pr-checks / Changelog entry`,
+    `pr-checks / Release label`. Don't require `ci / frontend`, `ci / rust` or
+    `ci / windows`. Labels `patch`, `minor`, `major`, `windows` must exist.
+- **Releasing is automatic: every merge to `main` is a release** (shared
+  `release.yml`, after `ci / ci-ok`, so Windows has passed). The version is the
+  latest `v*` tag bumped by the highest `patch`/`minor`/`major` label across the
+  PRs merged since that tag; `## [Unreleased]` becomes `## [X.Y.Z] - date`, the
+  manifests and `Cargo.lock` are synced, `Release vX.Y.Z [skip ci]` is pushed to
+  `main` with the annotated tag, the GitHub Release is created with the section
+  as notes and `build.yml` is dispatched on the tag. An empty `## [Unreleased]`
+  means already released.
+  - **Release push = deploy key.** `main`'s ruleset can only be bypassed by the
+    admin role and `DeployKey` (GitHub refuses the Actions app as a bypass actor
+    on a user-owned repo), so the push goes over SSH with the write-enabled
+    deploy key in secret `RELEASE_DEPLOY_KEY`, passed explicitly to the release
+    job. Without it the job fails with the setup commands. Rotating = new deploy
+    key + `gh secret set RELEASE_DEPLOY_KEY`, then delete the old key.
   - **Never bump the version or create a tag by hand**; `just version` is for
     emergencies only.
+
+### When to add the `windows` label
+
+Windows CI runs only on PRs with the `windows` label; it always runs after
+merge to `main` and gates the release. Add `windows` to a PR when it:
+
+- touches `cfg(windows)`, `cfg(unix)` or `target_os` code, or platform-specific modules
+- changes file paths, path separators, drive letters or case sensitivity; process spawning, PTY or shell quoting; environment variables; WSL
+- changes the Windows settings in `tauri.conf.json` (bundle, NSIS) or installer scripts
+- adds or upgrades a dependency with platform-specific code (`tauri`, `windows-rs`, `portable-pty`, …) or bumps the Rust toolchain
+- fixes a Windows bug
+
+Skip it for frontend-only, docs-only and purely cross-platform logic changes. If unsure, add it: `main` runs Windows after the merge anyway, and a failure there blocks the release.
+
+Windows-sensitive spots in this repo:
+
+- `src-tauri/src/main.rs` (`windows_subsystem`), `src-tauri/src/lib.rs` (`cfg(target_os = "macos")` menu and `Emitter` import: Windows/Linux have none)
+- `src-tauri/tauri.windows.conf.json` (no decorations, NSIS-only bundle) and `src-tauri/tauri.conf.json` (`bundle`, icons); the custom title bar in `src/App.tsx`
+- file-backed tabs and path handling: `src-tauri/src/commands/fs.rs` (`dunce` canonicalisation of `\\?\` paths, allowed roots), plus export/import paths in `commands/export.rs`, `commands/import.rs`, `commands/multi.rs`
+- `keyring` backends (`windows-native` vs `apple-native` vs `sync-secret-service`) in `crates/selene-core/Cargo.toml`, `crates/selene-core/src/secret.rs` and `crates/selene-core/src/secrets/`
+- SQLite file paths (`crates/selene-core/src/driver/sqlite/`) and file export/import (`crates/selene-core/src/export/`, `import/`)
+
+The Windows job tests `-p selene-core` only (`windows-test-scope`); the Tauri shell is compiled and clippy-checked there, not tested.
+
 - **Not yet set up:** Conventional Commits, pre-commit hooks,
   signed/notarized releases, and auto-update.
 
