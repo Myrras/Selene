@@ -10,6 +10,8 @@ when it merges.
 
 ## [Unreleased]
 
+## [1.4.16] - 2026-10-28
+
 ### Changed
 
 - **Every pull request needs a release label.** Each PR must carry exactly one
