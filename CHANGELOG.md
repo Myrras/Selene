@@ -10,6 +10,19 @@ when it merges.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Connecting no longer waits for a query in another tab.** Opening a
+  connection in a new tab used to hang until a long-running query in a
+  different tab had finished. Each connection now runs independently.
+- **Export now asks before re-running SQL that writes.** Export re-runs the
+  query, so a `DELETE` or `UPDATE` between `SELECT`s ran again without a word.
+  Export now goes through the same SQL guard as Run: it asks for confirmation,
+  or refuses on a read-only connection.
+- **The editor no longer scrolls away when you click back into it (macOS).**
+  After running a query, clicking into the editor could jump it to a different
+  position. It now stays where you left it.
+
 ## [1.4.16] - 2026-10-28
 
 ### Changed

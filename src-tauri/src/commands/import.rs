@@ -149,12 +149,13 @@ pub async fn import_csv(
 
     // The session is locked for the whole import: introspection, optional
     // CREATE TABLE, and the inserts all use the one connection exclusively
-    // (serializing with any concurrent query on the same session, as in v0.1).
-    let mut sessions = state.sessions.lock().await;
-    let session = match sessions.get_mut(&session_id) {
-        Some(s) => s,
-        None => return Err(fail(&on_progress, IpcError::unknown_session(&session_id))),
+    // (serializing with any concurrent query on the same session; other
+    // sessions are unaffected).
+    let session = match state.sessions.get(&session_id) {
+        Ok(s) => s,
+        Err(e) => return Err(fail(&on_progress, e)),
     };
+    let mut session = session.lock().await;
 
     // Importing is a write; refuse it on a read-only connection (defence in
     // depth alongside the SQL guard).
@@ -222,10 +223,8 @@ pub async fn table_drop(
     schema: String,
     table: String,
 ) -> Result<(), IpcError> {
-    let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&session_id)
-        .ok_or_else(|| IpcError::unknown_session(&session_id))?;
+    let session = state.sessions.get(&session_id)?;
+    let mut session = session.lock().await;
     if session.read_only {
         return Err(IpcError::new(
             "read_only",
