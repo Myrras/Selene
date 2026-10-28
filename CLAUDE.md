@@ -383,8 +383,9 @@ touch no code (questions, exploration) need no branch.
    label when the change is Windows-sensitive (see _CI_ under _Versioning_).
 4. **Merge = release** — merging a PR to `main` is the release; nobody bumps
    the version or tags by hand. Every PR needs exactly one of the labels
-   `patch`, `minor` or `major` (`gh pr edit N --add-label minor`), enforced by
-   the `Release label` check.
+   `release:patch`, `release:minor` or `release:major`
+   (`gh pr edit N --add-label release:minor`), enforced by the `Release label`
+   check. CI, config or docs-only PRs get `no-release` instead.
    Get explicit user confirmation first, because merging publishes a release.
 
 ## Versioning
@@ -407,7 +408,7 @@ touch no code (questions, exploration) need no branch.
     push to `main`, `release.yml` (`title-prefix: Selene`,
     `require-deploy-key: true`).
   - `pr-checks.yml` — `pr-checks / Changelog entry` and `pr-checks / Release
-    label` (exactly one of `patch`, `minor`, `major`). Separate from `ci.yml` so
+    label` (exactly one of `release:patch`, `release:minor`, `release:major`). Separate from `ci.yml` so
     labelling doesn't re-run the pipeline.
   - `integration.yml` — nightly + manual `just test-integration` (MSSQL,
     PostgreSQL, MySQL, MongoDB via testcontainers; `apt-packages: libdbus-1-dev
@@ -418,10 +419,10 @@ touch no code (questions, exploration) need no branch.
     `gh workflow run build.yml --ref vX.Y.Z`. Must stay named `build.yml`.
   - Required checks on `main`: `ci / ci-ok`, `pr-checks / Changelog entry`,
     `pr-checks / Release label`. Don't require `ci / frontend`, `ci / rust` or
-    `ci / windows`. Labels `patch`, `minor`, `major`, `windows` must exist.
+    `ci / windows`. Labels `release:patch`, `release:minor`, `release:major`, `no-release`, `windows` must exist.
 - **Releasing is automatic: every merge to `main` is a release** (shared
   `release.yml`, after `ci / ci-ok`, so Windows has passed). The version is the
-  latest `v*` tag bumped by the highest `patch`/`minor`/`major` label across the
+  latest `v*` tag bumped by the highest `release:patch`/`release:minor`/`release:major` label across the
   PRs merged since that tag; `## [Unreleased]` becomes `## [X.Y.Z] - date`, the
   manifests and `Cargo.lock` are synced, `Release vX.Y.Z [skip ci]` is pushed to
   `main` with the annotated tag, the GitHub Release is created with the section
