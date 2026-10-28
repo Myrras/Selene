@@ -23,6 +23,7 @@ use selene_core::{
     ExportSummary, Exporter, Flow, RowSink,
 };
 
+use crate::commands::query::enforce_guard;
 use crate::commands::{first_byte, ExportEvent};
 use crate::error::IpcError;
 use crate::state::AppState;
@@ -166,6 +167,19 @@ pub async fn export_result(
         err
     };
 
+    // Export re-runs `sql`, so enforce the same server-side guard as
+    // `query_run` (defence in depth; the UI prompts first) — before anything
+    // executes or the target file is created.
+    {
+        let handle = state
+            .sessions
+            .get(&session_id)
+            .map_err(|e| fail(&on_progress, e))?;
+        let session = handle.lock().await;
+        enforce_guard(&session_id, session.driver, &sql, session.read_only)
+            .map_err(|e| fail(&on_progress, e))?;
+    }
+
     let exporter = match Exporter::create(format, &target, csv_opts) {
         Ok(e) => e,
         Err(e) => return Err(fail(&on_progress, e.into())),
@@ -175,15 +189,15 @@ pub async fn export_result(
     let mut sink = ProgressSink::new(exporter, set_index.unwrap_or(0), on_progress.clone());
 
     // Execute into the progress sink. The session is locked for the duration,
-    // serializing with any concurrent query on the same session (v0.1).
+    // serializing with any concurrent query on the same session; other sessions
+    // are unaffected.
     let exec_result = {
-        let mut sessions = state.sessions.lock().await;
-        match sessions.get_mut(&session_id) {
-            Some(session) => session.conn.execute(&sql, &opts, &mut sink, &cancel).await,
-            None => {
-                return Err(fail(&on_progress, IpcError::unknown_session(&session_id)));
-            }
-        }
+        let handle = match state.sessions.get(&session_id) {
+            Ok(h) => h,
+            Err(e) => return Err(fail(&on_progress, e)),
+        };
+        let mut session = handle.lock().await;
+        session.conn.execute(&sql, &opts, &mut sink, &cancel).await
     };
 
     // Recover the exporter to flush/close it. `finish` re-raises any write error

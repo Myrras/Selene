@@ -16,10 +16,13 @@
 //! emitted so the frontend can tear the session down (clear the tree / detach
 //! the tab) and offer a reconnect.
 //!
-//! Pinging is the only operation that touches a connection here, and it shares
-//! the same session lock as queries, so the heartbeat never races a real query:
-//! while a query holds the lock the heartbeat simply waits, and a connection
-//! with a query in flight is, by definition, still alive.
+//! Pinging is the only operation that touches a connection here, and it takes
+//! the same per-session lock as queries, so the heartbeat never races a real
+//! query. It only `try_lock`s: a session that is busy (a query, export, … holds
+//! its lock) is skipped this round — a connection with work in flight is, by
+//! definition, still alive — so the heartbeat never queues behind a long query.
+//! Idle sessions are pinged concurrently, so one dead link (up to
+//! [`PING_TIMEOUT`]) does not delay checking the others.
 
 use std::time::Duration;
 
@@ -35,8 +38,8 @@ use crate::state::{AppState, HealthConfig};
 const MIN_INTERVAL_SECS: u64 = 2;
 
 /// How long a single health-check ping may take before the session is treated
-/// as dead. The heartbeat only pings *idle* sessions (a running query holds the
-/// lock, deferring the ping), and an idle healthy connection answers `SELECT 1`
+/// as dead. The heartbeat only pings *idle* sessions (a busy session is skipped
+/// for the round), and an idle healthy connection answers `SELECT 1`
 /// in milliseconds — so several seconds of silence reliably means the link is
 /// gone, not merely slow. Kept comfortably above a normal round-trip to avoid
 /// evicting a healthy session on a brief hiccup.
@@ -99,46 +102,47 @@ pub fn spawn_heartbeat<R: Runtime>(app: AppHandle<R>) {
     });
 }
 
-/// One heartbeat round: ping every live session and evict the dead ones.
+/// One heartbeat round: ping every idle live session and evict the dead ones.
 ///
-/// Holds the sessions lock for the round so pings can't interleave with a query
-/// on the same connection. Healthy pings are sub-millisecond, so for live
-/// sessions the lock is held only briefly; a *dead* session costs up to
-/// [`PING_TIMEOUT`] before it is evicted, which is the price of detecting it.
+/// Each idle session is pinged in its own task while holding only *its* lock,
+/// so the round never blocks other sessions, new connects, or a busy session's
+/// work. A *dead* session costs up to [`PING_TIMEOUT`] before it is evicted,
+/// which is the price of detecting it.
 async fn check_once<R: Runtime>(app: &AppHandle<R>) {
     let state = app.state::<AppState>();
 
-    let lost = {
-        let mut sessions = state.sessions.lock().await;
-        let ids: Vec<String> = sessions.keys().cloned().collect();
-        let mut lost: Vec<SessionLost> = Vec::new();
+    let mut pings = Vec::new();
+    for (id, handle) in state.sessions.snapshot() {
+        // Busy session: in-flight work proves the link is alive; skip it.
+        let Ok(mut session) = handle.clone().try_lock_owned() else {
+            continue;
+        };
+        pings.push(tauri::async_runtime::spawn(async move {
+            let ping = tokio::time::timeout(PING_TIMEOUT, session.conn.ping()).await;
+            // Either outcome — a ping error or a timeout — means the link is gone.
+            let dead = !matches!(ping, Ok(Ok(())));
+            let connection_id = session.connection_id.clone();
+            drop(session);
+            (id, handle, dead, connection_id)
+        }));
+    }
 
-        for id in ids {
-            let ping = match sessions.get_mut(&id) {
-                Some(session) => tokio::time::timeout(PING_TIMEOUT, session.conn.ping()).await,
-                None => continue,
-            };
-            // Either outcome — a ping error or a timeout — means the link is
-            // gone. Evict the session (dropping it closes the connection).
-            let dead = match ping {
-                Ok(Ok(())) => false,
-                Ok(Err(_)) | Err(_) => true,
-            };
-            if dead {
-                if let Some(session) = sessions.remove(&id) {
-                    tracing::warn!(session_id = %id, "health check failed; session auto-closed");
-                    lost.push(SessionLost {
-                        session_id: id,
-                        connection_id: session.connection_id,
-                    });
-                }
-            }
+    for ping in pings {
+        let Ok((id, handle, dead, connection_id)) = ping.await else {
+            continue;
+        };
+        // Evict only if the map still holds this very session (it may have been
+        // disconnected meanwhile). Dropping the last handle closes the
+        // connection.
+        if dead && state.sessions.remove_if_current(&id, &handle) {
+            tracing::warn!(session_id = %id, "health check failed; session auto-closed");
+            let _ = app.emit(
+                "session:lost",
+                SessionLost {
+                    session_id: id,
+                    connection_id,
+                },
+            );
         }
-        lost
-    };
-
-    // Notify the frontend after releasing the lock.
-    for event in lost {
-        let _ = app.emit("session:lost", event);
     }
 }

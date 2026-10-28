@@ -63,13 +63,54 @@ export interface RunOptions {
   onBlock: BlockFn;
 }
 
+/** What the pre-run guard gate needs; a subset of {@link RunOptions}. */
+export type GuardGateOptions = Pick<
+  RunOptions,
+  "sql" | "readOnly" | "driver" | "onConfirm" | "onBlock"
+>;
+
+/**
+ * The pre-execution guard gate shared by Run and Export (which re-runs the
+ * SQL server-side): classify, show the block message, or ask for confirmation.
+ * Resolves to whether execution may proceed. A failed guard check is reported
+ * as a toast and does not proceed.
+ */
+export async function passGuard(opts: GuardGateOptions): Promise<boolean> {
+  const { sql, readOnly, driver } = opts;
+  let verdict: GuardVerdict;
+  try {
+    verdict = await guardCheck(sql, readOnly, driver);
+  } catch (err) {
+    const e = asIpcError(err);
+    toastError("Guard check failed", e.message);
+    return false;
+  }
+
+  if (verdict.level === "block") {
+    opts.onBlock(verdict);
+    return false;
+  }
+  if (verdict.level === "confirm") {
+    return opts.onConfirm(verdict);
+  }
+  // confirmOnReadWrite: also confirm info-level queries on read-write connections.
+  if (
+    verdict.level === "info" &&
+    !readOnly &&
+    useSettingsStore.getState().query.confirmOnReadWrite
+  ) {
+    return opts.onConfirm(verdict);
+  }
+  return true;
+}
+
 /**
  * Drive one query end-to-end. Resolves once the query has been *started*
  * (the stream then continues to feed the store via the channel). Resolves early
  * (without running) if the guard blocks or the user declines a confirm.
  */
 export async function runQuery(opts: RunOptions): Promise<void> {
-  const { tabId, sessionId, sql, readOnly, driver } = opts;
+  const { tabId, sessionId, sql } = opts;
   const store = useEditorStore.getState();
 
   if (!sql.trim()) return;
@@ -78,33 +119,8 @@ export async function runQuery(opts: RunOptions): Promise<void> {
   // batch switched it (the indicator updates silently otherwise).
   const previousDatabase = getTab(tabId)?.currentDatabase ?? null;
 
-  // (1) Guard check.
-  let verdict: GuardVerdict;
-  try {
-    verdict = await guardCheck(sql, readOnly, driver);
-  } catch (err) {
-    const e = asIpcError(err);
-    toastError("Guard check failed", e.message);
-    return;
-  }
-
-  if (verdict.level === "block") {
-    opts.onBlock(verdict);
-    return;
-  }
-  if (verdict.level === "confirm") {
-    const accepted = await opts.onConfirm(verdict);
-    if (!accepted) return;
-  }
-  // confirmOnReadWrite: also confirm info-level queries on read-write connections.
-  if (
-    verdict.level === "info" &&
-    !readOnly &&
-    useSettingsStore.getState().query.confirmOnReadWrite
-  ) {
-    const accepted = await opts.onConfirm(verdict);
-    if (!accepted) return;
-  }
+  // (1) Guard check (block / confirm / confirm-on-read-write).
+  if (!(await passGuard(opts))) return;
 
   // (2) Reset result state and open the streaming channel.
   store.resetResult(tabId, sql);

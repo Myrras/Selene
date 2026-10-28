@@ -23,6 +23,7 @@ import { githubDark, githubLight } from "@uiw/codemirror-theme-github";
 
 import type { DriverId } from "../ipc/types";
 import { keepIndentOnEnter } from "../lib/editorKeymap";
+import { scrollSafeFocus } from "../lib/scrollSafeFocus";
 import { dialectFor } from "../lib/sqlDialect";
 import { selectSql, useEditorStore } from "../state/editorStore";
 import { useThemeStore } from "../state/themeStore";
@@ -51,8 +52,8 @@ interface SqlEditorProps {
   /**
    * Populated with the live `EditorView` on creation so the parent can drive it
    * (e.g. return focus after a Run/guard action — see EditorPane). Focusing via
-   * `view.focus()` is scroll-safe; a raw DOM `.focus()` scroll-jumps on the
-   * macOS WebView (WebKit ignores `preventScroll`).
+   * `view.focus()` is scroll-safe (the `scrollSafeFocus` extension restores any
+   * scroll the focus causes; the macOS WebView ignores `preventScroll`).
    */
   viewRef?: React.MutableRefObject<EditorView | null>;
 }
@@ -194,6 +195,9 @@ export function SqlEditor({
         : sql({ dialect, upperCaseKeywords: editor.upperCaseKeywords }),
       editorKeymap,
       keepIndentOnEnter,
+      // Focusing the editor must never scroll it (WebKit 26 ignores
+      // `preventScroll`; see lib/scrollSafeFocus).
+      scrollSafeFocus,
       // Provides the search state the overlay drives via `setSearchQuery`; its
       // own panel is never opened, so only the query/highlight machinery is used.
       search(),
@@ -245,6 +249,24 @@ export function SqlEditor({
     [extensions, retroBg],
   );
 
+  // Memoized for the same reason: @uiw/react-codemirror re-dispatches a full
+  // `reconfigure` (with a freshly generated theme class) whenever the
+  // `basicSetup` object identity changes. Inline, that happened on every
+  // EditorPane render — several times per query run as status/results update.
+  const basicSetup = useMemo(
+    () => ({
+      lineNumbers: editor.lineNumbers,
+      foldGutter: false,
+      highlightActiveLine: true,
+      autocompletion: editor.autocompletion,
+      bracketMatching: editor.bracketPairs,
+      closeBrackets: editor.bracketPairs,
+      // The stock Mod-f search panel is replaced by our themed overlay.
+      searchKeymap: false,
+    }),
+    [editor.lineNumbers, editor.autocompletion, editor.bracketPairs],
+  );
+
   return (
     <div className={styles.host}>
       <CodeMirror
@@ -257,16 +279,7 @@ export function SqlEditor({
           setView(v);
           if (viewRef) viewRef.current = v;
         }}
-        basicSetup={{
-          lineNumbers: editor.lineNumbers,
-          foldGutter: false,
-          highlightActiveLine: true,
-          autocompletion: editor.autocompletion,
-          bracketMatching: editor.bracketPairs,
-          closeBrackets: editor.bracketPairs,
-          // The stock Mod-f search panel is replaced by our themed overlay.
-          searchKeymap: false,
-        }}
+        basicSetup={basicSetup}
         style={{ height: "100%", overflow: "hidden" }}
       />
       <EditorSearch

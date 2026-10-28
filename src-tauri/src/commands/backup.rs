@@ -90,10 +90,8 @@ async fn session_connection(
     state: &AppState,
     session_id: &str,
 ) -> Result<(String, bool), IpcError> {
-    let sessions = state.sessions.lock().await;
-    let session = sessions
-        .get(session_id)
-        .ok_or_else(|| IpcError::unknown_session(session_id))?;
+    let session = state.sessions.get(session_id)?;
+    let session = session.lock().await;
     Ok((session.connection_id.clone(), session.read_only))
 }
 
@@ -443,10 +441,8 @@ pub async fn restore_filelist(
     session_id: String,
     path: String,
 ) -> Result<Vec<BackupFile>, IpcError> {
-    let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&session_id)
-        .ok_or_else(|| IpcError::unknown_session(&session_id))?;
+    let session = state.sessions.get(&session_id)?;
+    let mut session = session.lock().await;
     let files = session.conn.restore_filelist(&path).await?;
     Ok(files)
 }
@@ -459,10 +455,8 @@ pub async fn server_default_backup_dir(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<String, IpcError> {
-    let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&session_id)
-        .ok_or_else(|| IpcError::unknown_session(&session_id))?;
+    let session = state.sessions.get(&session_id)?;
+    let mut session = session.lock().await;
     Ok(session.conn.default_backup_dir().await?)
 }
 
@@ -474,10 +468,8 @@ pub async fn server_list_dir(
     session_id: String,
     path: String,
 ) -> Result<Vec<ServerDirEntry>, IpcError> {
-    let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&session_id)
-        .ok_or_else(|| IpcError::unknown_session(&session_id))?;
+    let session = state.sessions.get(&session_id)?;
+    let mut session = session.lock().await;
     Ok(session.conn.list_server_dir(&path).await?)
 }
 
@@ -491,10 +483,8 @@ pub async fn server_delete_file(
     session_id: String,
     path: String,
 ) -> Result<(), IpcError> {
-    let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&session_id)
-        .ok_or_else(|| IpcError::unknown_session(&session_id))?;
+    let session = state.sessions.get(&session_id)?;
+    let mut session = session.lock().await;
     session.conn.delete_server_file(&path).await?;
     tracing::info!(%session_id, "server file deleted");
     Ok(())

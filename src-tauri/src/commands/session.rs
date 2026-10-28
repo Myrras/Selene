@@ -90,11 +90,9 @@ pub async fn session_connect(
         current_database: spec.database.clone(),
         conn,
     };
-    state
-        .sessions
-        .lock()
-        .await
-        .insert(session_id.clone(), entry);
+    // Registering takes only the brief map lock, so connecting never waits on
+    // a query (or any other work) running on another session.
+    state.sessions.insert(session_id.clone(), entry);
 
     tracing::info!(
         %session_id,
@@ -120,10 +118,8 @@ pub async fn session_use_database(
     session_id: String,
     database: String,
 ) -> Result<(), IpcError> {
-    let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&session_id)
-        .ok_or_else(|| IpcError::unknown_session(&session_id))?;
+    let session = state.sessions.get(&session_id)?;
+    let mut session = session.lock().await;
     session.conn.use_database(&database).await?;
     session.current_database = Some(database.clone());
     tracing::info!(%session_id, %database, "session database switched");
@@ -140,10 +136,8 @@ pub async fn session_create_database(
     session_id: String,
     database: String,
 ) -> Result<(), IpcError> {
-    let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&session_id)
-        .ok_or_else(|| IpcError::unknown_session(&session_id))?;
+    let session = state.sessions.get(&session_id)?;
+    let mut session = session.lock().await;
     if session.read_only {
         return Err(IpcError::new(
             "blocked",
@@ -165,10 +159,8 @@ pub async fn session_drop_database(
     session_id: String,
     database: String,
 ) -> Result<(), IpcError> {
-    let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&session_id)
-        .ok_or_else(|| IpcError::unknown_session(&session_id))?;
+    let session = state.sessions.get(&session_id)?;
+    let mut session = session.lock().await;
     if session.read_only {
         return Err(IpcError::new(
             "blocked",
@@ -196,10 +188,8 @@ pub async fn session_rename_database(
     to: String,
     force: bool,
 ) -> Result<(), IpcError> {
-    let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&session_id)
-        .ok_or_else(|| IpcError::unknown_session(&session_id))?;
+    let session = state.sessions.get(&session_id)?;
+    let mut session = session.lock().await;
     if session.read_only {
         return Err(IpcError::new(
             "blocked",
@@ -222,10 +212,8 @@ pub async fn session_set_database_online(
     database: String,
     online: bool,
 ) -> Result<(), IpcError> {
-    let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&session_id)
-        .ok_or_else(|| IpcError::unknown_session(&session_id))?;
+    let session = state.sessions.get(&session_id)?;
+    let mut session = session.lock().await;
     if session.read_only {
         return Err(IpcError::new(
             "blocked",
@@ -246,10 +234,8 @@ pub async fn session_current_database(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<String, IpcError> {
-    let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&session_id)
-        .ok_or_else(|| IpcError::unknown_session(&session_id))?;
+    let session = state.sessions.get(&session_id)?;
+    let mut session = session.lock().await;
     let db = session.conn.current_database().await?;
     // Keep the tracked context fresh: this is called after every finished
     // query, so a `USE` inside a batch also lands here.
@@ -263,14 +249,17 @@ pub async fn session_current_database(
 ///
 /// Removing an unknown or already-closed session id is a no-op (the desired
 /// end-state — no live session — is reached either way).
+///
+/// Does not wait for an operation in flight on the session: that operation
+/// keeps its own handle to the connection, which closes once it finishes.
 #[tauri::command]
 pub async fn session_disconnect(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<(), IpcError> {
-    let removed = state.sessions.lock().await.remove(&session_id).is_some();
-    // Dropping the `SessionEntry` (and its `Box<dyn Connection>`) closes the
-    // underlying connection.
+    let removed = state.sessions.remove(&session_id);
+    // Dropping the last handle to the `SessionEntry` (and its
+    // `Box<dyn Connection>`) closes the underlying connection.
     tracing::info!(%session_id, was_open = removed, "session disconnected");
     Ok(())
 }
