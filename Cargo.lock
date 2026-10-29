@@ -4470,7 +4470,7 @@ dependencies = [
 
 [[package]]
 name = "selene"
-version = "1.4.18"
+version = "1.4.19"
 dependencies = [
  "async-trait",
  "dunce",
@@ -4490,7 +4490,7 @@ dependencies = [
 
 [[package]]
 name = "selene-core"
-version = "1.4.18"
+version = "1.4.19"
 dependencies = [
  "async-trait",
  "bson",
