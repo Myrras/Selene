@@ -25,7 +25,7 @@ tauri-plugin-log = "2"
 # Cross-platform filesystem change notifications for two-way file sync (an
 # external agent editing an open `.sql` updates the tab). Watches are recursive
 # over folders; events are filtered to `.sql` and pushed to the frontend.
-notify = "6"
+notify = "8"
 # `canonicalize` without the Windows `\\?\` UNC prefix (no-op delegate to std on
 # Unix), so watcher-reported paths match the canonical paths stored on tabs.
 dunce = "1"
