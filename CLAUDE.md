@@ -110,7 +110,7 @@ layer for file-backed tabs). `src/` is the React app.
 ```
 Selene/
 ├─ Cargo.toml                  # [workspace]; [workspace.package] version is the source of truth
-├─ justfile                    # dev/build/test/format/version recipes; imports shared common.just
+├─ justfile                    # drivers-check/test-integration; imports shared common.just (dev, build, check, format, version...)
 ├─ crates/selene-core/src/
 │  ├─ value.rs                 # CellValue, Column, LogicalType, TemporalKind (driver-neutral)
 │  ├─ connection_spec.rs       # ConnectionSpec, AuthMethod (open enum), DriverId, TlsConfig
@@ -240,23 +240,27 @@ non-SELECT on a read-only connection) is refused before execution.
 Prefer `just` (run `just` to list recipes). The Tauri CLI is provided by the
 local `@tauri-apps/cli` dev-dependency, so use `pnpm tauri …` (no global install).
 
-Shared recipes (`ci`, `rust`, `frontend`, `build-signed`, `sweep`) live in
-`common.just` of `RobbieMinderhoud/ci-workflows`, imported by the justfile from
-`~/.ci-workflows` (`ln -s /path/to/ci-workflows ~/.ci-workflows`). Without that
-symlink those recipes are missing. The version and release scripts are shared
-too: `~/.ci-workflows/scripts/`.
+Most recipes (`dev`, `dev-signed`, `build`, `build-signed`, `install-signed`,
+`check`, `test-core`, `format`, `version`, `version-check`, `ci`, `rust`,
+`frontend`, `sweep`) are shared: they live in `common.just` of
+`RobbieMinderhoud/ci-workflows`, imported by the justfile from `~/.ci-workflows`
+(`ln -s /path/to/ci-workflows ~/.ci-workflows`). Without that symlink they are
+missing. The justfile only defines `drivers-check` and `test-integration`; never
+redefine a shared recipe there (just rejects duplicates). The version and
+release scripts are shared too: `~/.ci-workflows/scripts/`.
 
 ```
-just dev            # run the app (Vite + Tauri, hot reload)
-just build          # production bundle (.app + APFS .dmg)
+just dev            # shared: run the app (Vite + Tauri, hot reload)
+just build          # shared: production bundle (.app + APFS .dmg)
+just install-signed # shared: signed release build, installed to /Applications
 just ci             # shared: the full CI pipeline locally (rust, then frontend)
-just check          # cargo check --workspace
-just test-core      # selene-core unit tests
+just check          # shared: cargo check --workspace
+just test-core      # shared: selene-core unit tests
 just drivers-check  # clippy + tests for the sqlite/postgres/mysql/mongodb features
 just test-integration  # dockerized MSSQL/PostgreSQL/MySQL/MongoDB tests (Docker required)
-just format         # rustfmt + prettier (writes)
-just version 1.1.0  # bump + sync version across all manifests (emergencies only; CI bumps on merge)
-just version-check  # verify versions are in sync
+just format         # shared: rustfmt + prettier (writes)
+just version 1.1.0  # shared: bump + sync version across all manifests (emergencies only; CI bumps on merge)
+just version-check  # shared: verify versions are in sync
 ```
 
 Every recipe exports `CARGO_TARGET_DIR` pointing at the **main checkout's**
