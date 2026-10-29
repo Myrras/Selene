@@ -1,0 +1,13 @@
+{
+  "ci": {
+    "windows-test-scope": "-p selene-core",
+    "extra-recipe": "drivers-check"
+  },
+  "release": {
+    "title-prefix": "Selene",
+    "require-deploy-key": true
+  },
+  "integration": {
+    "apt-packages": "libdbus-1-dev pkg-config"
+  }
+}
