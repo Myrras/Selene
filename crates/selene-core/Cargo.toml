@@ -90,7 +90,7 @@ chrono = { workspace = true }
 # `connection closed via error` — see the integration tests in
 # `tests/mssql_integration.rs`. rustls connects successfully and is the same
 # pure-Rust stack across macOS/Windows/Linux.
-tiberius = { version = "0.12", default-features = false, features = [
+tiberius = { version = "0.13", default-features = false, features = [
     "tds73",
     "rustls",
     "sql-browser-tokio",
