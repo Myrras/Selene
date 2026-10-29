@@ -10,6 +10,11 @@ when it merges.
 
 ## [Unreleased]
 
+### Security
+
+- **Dependency security updates.** Updated vite to 7.3.7 and dependencies to
+  their latest minor and patch versions, fixing known vulnerabilities.
+
 ## [1.4.18] - 2026-10-28
 
 ### Changed
