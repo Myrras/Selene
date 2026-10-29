@@ -8,7 +8,7 @@ Rust does all DB/query/export logic; the web layer is presentation only.
 
 ## Quick start
 
-Prereqs: Rust (stable), Node 20+, pnpm, [`just`](https://github.com/casey/just), and a clone of `RobbieMinderhoud/rust-base` symlinked as `~/.rust-base` (provides the shared recipes such as `just dev`, `just build`, `just ci`, and the version scripts; see `just --list`).
+Prereqs: Rust (stable), Node 20+, pnpm, [`just`](https://github.com/casey/just), and a clone of `Myrras/rust-base` symlinked as `~/.rust-base` (provides the shared recipes such as `just dev`, `just build`, `just ci`, and the version scripts; see `just --list`).
 
 ```sh
 pnpm install
