@@ -7,7 +7,7 @@ Guidance for AI agents (and humans) working in this repository.
 ## Shared CI and recipes (rust-base)
 
 CI, release and installer builds come from
-<https://github.com/RobbieMinderhoud/rust-base>. `.github/workflows/` holds thin
+<https://github.com/Myrras/rust-base>. `.github/workflows/` holds thin
 callers (`ci.yml`, `pr-checks.yml`, `build.yml`, `integration.yml`) of its
 reusable workflows, pinned `@v2`. The callers and the shared config files
 (`.gitattributes`, `.editorconfig`, `rust-toolchain.toml`, `.prettierrc.json`,
@@ -86,7 +86,7 @@ slot in later without rework. macOS-first; Windows/Linux kept in mind.
 
 > Naming: the product and the repo are both **Selene** now (renamed from the
 > original codename `SELECT`). Crates are `selene-*`; bundle id `com.selene.app`.
-> Public on GitHub: https://github.com/RobbieMinderhoud/Selene.
+> Public on GitHub: https://github.com/Myrras/Selene.
 
 ## Boilerplate (shared skeleton)
 
@@ -96,12 +96,11 @@ React frontend), the `justfile`, the shared CI (`rust-base`), the shared
 config files, the design tokens, and the layering/IPC conventions — is
 extracted into a standalone template:
 
-- **Repo:** <https://github.com/RobbieMinderhoud/rust-application-boilerplate>
-  (`../rust-application-boilerplate` locally). It is the **upstream** source of
+- **Repo:** rust-base. It is the **upstream** source of
   truth for the skeleton; Selene carries its domain (SQL drivers, editor,
   results grid) on top.
 - **Rule:** when a change here touches the **shared skeleton or conventions**
-  (not Selene-specific domain code), also open a **PR against the boilerplate**
+  (not Selene-specific domain code), also open a **PR against rust-base**
   so it stays current. App-specific code does not flow back.
 
 ## Status — v1.0
@@ -439,7 +438,7 @@ own keychain items silently, so end users never see it.
 
 ## Git workflow
 
-The repo is on GitHub (`RobbieMinderhoud/Selene`); use the **`gh` CLI** for PRs.
+The repo is on GitHub (`Myrras/Selene`); use the **`gh` CLI** for PRs.
 **Every code change goes through a branch → PR** — do not commit straight to
 `main`. `main` stays releasable; every merged PR is released automatically
 (see _Versioning_). We do **not** open a GitHub issue per change: the PR
