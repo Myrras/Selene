@@ -36,7 +36,7 @@ function isAlnum(ch: string): boolean {
  * same case.
  */
 function occursAsToken(haystack: string, needle: string): boolean {
-  for (let from = 0; ; ) {
+  for (let from = 0; ;) {
     const at = haystack.indexOf(needle, from);
     if (at === -1) return false;
     const before = at === 0 ? "" : haystack[at - 1];

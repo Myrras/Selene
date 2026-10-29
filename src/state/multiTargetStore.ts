@@ -18,11 +18,7 @@ import type { MultiMode, ResolvedTarget } from "../ipc/types";
 export type DbMode = "query" | "list";
 
 export type MultiRunStatus =
-  | "idle"
-  | "running"
-  | "paused"
-  | "done"
-  | "cancelled";
+  "idle" | "running" | "paused" | "done" | "cancelled";
 
 /** Status of one (server, database) — or one server-level failure. */
 export interface TargetProgress {
