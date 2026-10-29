@@ -38,8 +38,7 @@ const EXPORT_FORMATS: { format: ExportFormat; label: string; ext: string }[] = [
 
 export function ResultsPanel({ tabId }: ResultsPanelProps) {
   const result = useEditorStore((s) => s.results[tabId]) as
-    | ResultState
-    | undefined;
+    ResultState | undefined;
   const setActiveSet = useEditorStore((s) => s.setActiveSet);
   const tab = useEditorStore((s) => s.tabs.find((t) => t.id === tabId));
   const session = useSessionStore((s) =>

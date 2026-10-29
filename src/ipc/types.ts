@@ -465,8 +465,7 @@ export interface FsEntry {
  * the same canonical form stored on tabs, so it matches directly.
  */
 export type FsEvent =
-  | { kind: "changed"; path: string }
-  | { kind: "removed"; path: string };
+  { kind: "changed"; path: string } | { kind: "removed"; path: string };
 
 // ---------------------------------------------------------------------------
 // Guard / test / error
