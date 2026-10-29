@@ -1,9 +1,9 @@
 # Selene — development tasks. Run `just` (or `just --list`) to see them.
 # Shared recipes (dev, dev-signed, build, build-signed, install-signed, check,
 # test-core, format, version, version-check, ci, rust, frontend, sweep) come
-# from the ci-workflows clone: `ln -s /path/to/ci-workflows ~/.ci-workflows`.
+# from the rust-base clone: `ln -s /path/to/rust-base ~/.rust-base`.
 # Don't redefine them here (just rejects duplicates); see `just --list`.
-import? '~/.ci-workflows/common.just'
+import? '~/.rust-base/ci/common.just'
 
 # Share one target/ across the main checkout and every git worktree. A fresh
 # worktree otherwise starts cold and rebuilds every dependency (minutes);
@@ -19,7 +19,7 @@ default:
 
 # The default workspace build doesn't compile the off-by-default drivers.
 # Docker-backed tests stay `#[ignore]`d, so only unit tests and SQLite's
-# in-process tests run. CI passes this as the `extra-recipe` of tauri-ci.yml.
+# in-process tests run. CI passes this as the `extra-recipe` in .github/rust-base.json.
 # Standalone: no common.just dependency.
 
 # Clippy + tests for the sqlite, postgres, mysql and mongodb drivers.

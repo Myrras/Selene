@@ -2,6 +2,77 @@
 
 Guidance for AI agents (and humans) working in this repository.
 
+<!-- rust-base:start -->
+<!-- Synced from rust-base. Do not edit this block here; change it in rust-base. -->
+## Shared CI and recipes (rust-base)
+
+CI, release and installer builds come from
+<https://github.com/RobbieMinderhoud/rust-base>. `.github/workflows/` holds thin
+callers (`ci.yml`, `pr-checks.yml`, `build.yml`, `integration.yml`) of its
+reusable workflows, pinned `@v2`. The callers and the shared config files
+(`.gitattributes`, `.editorconfig`, `rust-toolchain.toml`, `.prettierrc.json`,
+`.prettierignore`, `eslint.config.js`, `tsconfig*.json`,
+`.github/dependabot.yml`) are synced from rust-base: **change them there**,
+not here. Behaviour is documented in the rust-base README.
+
+App-specific CI settings (runner, Windows test scope, extra recipe, release
+title prefix, integration packages and env) live in `.github/rust-base.json`.
+That file is owned by this repo.
+
+- **Required checks on `main`:** `ci / ci-ok`, `pr-checks / Changelog entry`,
+  `pr-checks / Release label`. Don't require `ci / frontend`, `ci / rust` or
+  `ci / windows`. The labels `release:patch`, `release:minor`, `release:major`,
+  `no-release` and `windows` must exist.
+- **Release labels:** every PR carries exactly one of `release:patch`,
+  `release:minor` or `release:major`, enforced by `pr-checks.yml`. Use
+  `no-release` for CI, config or docs-only PRs. Merging to `main` releases:
+  the version is the latest `v*` tag bumped by the highest label across the PRs
+  merged since. Never bump the version or create a tag by hand; `just version`
+  is for emergencies only.
+- **Changelog gate:** every PR adds an entry under `## [Unreleased]` in
+  `CHANGELOG.md` (user-facing changes only, _Keep a Changelog_). `pr-checks.yml`
+  fails unless the PR touches `CHANGELOG.md` and that section holds at least one
+  `- ` entry. The heading must stay exactly `## [Unreleased]`. `no-release` PRs
+  need no entry.
+- **`packageManager`:** don't add one to `package.json`. The shared workflows
+  set pnpm 10; a second version fails setup.
+- **Shared recipes** (`dev`, `dev-signed`, `build`, `build-signed`,
+  `install-signed`, `check`, `test-core`, `format`, `version`, `version-check`,
+  `rust`, `frontend`, `ci`, `sweep`) come from `ci/common.just` in rust-base.
+  The justfile imports it with `import? '~/.rust-base/ci/common.just'`; link
+  your clone with `ln -s /path/to/rust-base ~/.rust-base`. Don't redefine those
+  names (just rejects duplicates) and never add `set allow-duplicate-recipes`:
+  change the shared recipe in rust-base instead. Recipes that CI calls
+  (`test-integration`) must not depend on shared recipes: in CI the optional
+  import resolves to nothing.
+
+### When to add the `windows` label
+
+Windows CI runs on pushes to `main` and on PRs that carry the `windows` label
+(adding the label re-runs CI for the PR). It gates the release. Add `windows`
+to a PR when it:
+
+- touches `cfg(windows)`, `cfg(unix)` or `target_os` code, or platform-specific modules
+- changes file paths, path separators, drive letters or case sensitivity; process spawning, PTY or shell quoting; environment variables; WSL
+- changes the Windows settings in `tauri.conf.json` (bundle, NSIS) or installer scripts
+- adds or upgrades a dependency with platform-specific code (`tauri`, `windows-rs`, `portable-pty`, …) or bumps the Rust toolchain
+- fixes a Windows bug
+
+Skip it for frontend-only, docs-only and purely cross-platform logic changes. If unsure, add it: `main` runs Windows after the merge anyway, and a failure there blocks the release.
+<!-- rust-base:end -->
+
+## Windows-sensitive spots
+
+Where Windows behaviour differs in this repo (see the `windows` label rules above):
+
+- `src-tauri/src/main.rs` (`windows_subsystem`), `src-tauri/src/lib.rs` (`cfg(target_os = "macos")` menu and `Emitter` import: Windows/Linux have none)
+- `src-tauri/tauri.windows.conf.json` (no decorations, NSIS-only bundle) and `src-tauri/tauri.conf.json` (`bundle`, icons); the custom title bar in `src/App.tsx`
+- file-backed tabs and path handling: `src-tauri/src/commands/fs.rs` (`dunce` canonicalisation of `\\?\` paths, allowed roots), plus export/import paths in `commands/export.rs`, `commands/import.rs`, `commands/multi.rs`
+- `keyring` backends (`windows-native` vs `apple-native` vs `sync-secret-service`) in `crates/selene-core/Cargo.toml`, `crates/selene-core/src/secret.rs` and `crates/selene-core/src/secrets/`
+- SQLite file paths (`crates/selene-core/src/driver/sqlite/`) and file export/import (`crates/selene-core/src/export/`, `import/`)
+
+The Windows job tests `-p selene-core` only (`windows-test-scope`); the Tauri shell is compiled and clippy-checked there, not tested.
+
 ## What Selene is
 
 Selene is a modern, sleek, cross-platform **desktop SQL editor** (in the spirit of
@@ -17,7 +88,7 @@ slot in later without rework. macOS-first; Windows/Linux kept in mind.
 
 Selene's shared skeleton — the Cargo workspace shape (a `*-core` crate with
 zero Tauri dependency + a thin `src-tauri` IPC layer + a presentation-only
-React frontend), the `justfile`, the shared CI (`ci-workflows`), the shared
+React frontend), the `justfile`, the shared CI (`rust-base`), the shared
 config files, the design tokens, and the layering/IPC conventions — is
 extracted into a standalone template:
 
@@ -242,12 +313,8 @@ local `@tauri-apps/cli` dev-dependency, so use `pnpm tauri …` (no global insta
 
 Most recipes (`dev`, `dev-signed`, `build`, `build-signed`, `install-signed`,
 `check`, `test-core`, `format`, `version`, `version-check`, `ci`, `rust`,
-`frontend`, `sweep`) are shared: they live in `common.just` of
-`RobbieMinderhoud/ci-workflows`, imported by the justfile from `~/.ci-workflows`
-(`ln -s /path/to/ci-workflows ~/.ci-workflows`). Without that symlink they are
-missing. The justfile only defines `drivers-check` and `test-integration`; never
-redefine a shared recipe there (just rejects duplicates). The version and
-release scripts are shared too: `~/.ci-workflows/scripts/`.
+`frontend`, `sweep`) are shared: see "Shared CI and recipes" above. The justfile
+only defines `drivers-check` and `test-integration`.
 
 ```
 just dev            # shared: run the app (Vite + Tauri, hot reload)
@@ -398,34 +465,21 @@ touch no code (questions, exploration) need no branch.
   single source of truth; `sync-version.sh` (shared) propagates it to
   `tauri.conf.json` and `package.json` (run `just version-check` to detect drift).
 - **`CHANGELOG.md`** follows _Keep a Changelog_ and lists **only functional
-  (user-facing) changes**. Every PR adds its entry under `## [Unreleased]`;
-  the shared `pr-checks / Changelog entry` check fails unless the PR touches
-  `CHANGELOG.md` and that section holds at least one `- ` entry. The heading
-  must stay exactly `## [Unreleased]`: the release fails without it.
-- **CI:** thin caller workflows in `.github/workflows/` over the shared
-  workflows in `RobbieMinderhoud/ci-workflows`, pinned `@v1`. Behaviour lives
-  in that repo; see its README. Selene's inputs:
-  - `ci.yml` — on pull requests and pushes to `main`: `tauri-ci.yml` (jobs
-    `frontend`, `rust` on ubuntu, `windows`, aggregate `ci-ok`) with
-    `windows-test-scope: -p selene-core` and `extra-recipe: drivers-check`
-    (clippy + tests for the sqlite/postgres/mysql/mongodb features), then, on
-    push to `main`, `release.yml` (`title-prefix: Selene`,
-    `require-deploy-key: true`).
-  - `pr-checks.yml` — `pr-checks / Changelog entry` and `pr-checks / Release
-    label` (exactly one of `release:patch`, `release:minor`, `release:major`). Separate from `ci.yml` so
-    labelling doesn't re-run the pipeline.
-  - `integration.yml` — nightly + manual `just test-integration` (MSSQL,
+  (user-facing) changes**. The shared gate (see above) applies.
+- **CI:** thin callers of rust-base (see above). Selene's inputs live in
+  `.github/rust-base.json`:
+  - `ci`: `windows-test-scope: -p selene-core` and `extra-recipe:
+    drivers-check` (clippy + tests for the sqlite/postgres/mysql/mongodb
+    features). `release`: `title-prefix: Selene`, `require-deploy-key: true`.
+  - `integration`: nightly + manual `just test-integration` (MSSQL,
     PostgreSQL, MySQL, MongoDB via testcontainers; `apt-packages: libdbus-1-dev
     pkg-config` for keyring). The keychain test stays excluded.
-  - `build.yml` — dispatch only; `release.yml` dispatches it with `--ref <tag>`
+  - `build.yml`: dispatch only; the release dispatches it with `--ref <tag>`
     and the installers (macOS `.dmg`, Windows NSIS `.exe`) are attached to that
     tag's GitHub Release. A hand-pushed tag builds with
     `gh workflow run build.yml --ref vX.Y.Z`. Must stay named `build.yml`.
-  - Required checks on `main`: `ci / ci-ok`, `pr-checks / Changelog entry`,
-    `pr-checks / Release label`. Don't require `ci / frontend`, `ci / rust` or
-    `ci / windows`. Labels `release:patch`, `release:minor`, `release:major`, `no-release`, `windows` must exist.
-- **Releasing is automatic: every merge to `main` is a release** (shared
-  `release.yml`, after `ci / ci-ok`, so Windows has passed). The version is the
+- **Releasing is automatic: every merge to `main` is a release** (rust-base
+  release workflow, after `ci / ci-ok`, so Windows has passed). The version is the
   latest `v*` tag bumped by the highest `release:patch`/`release:minor`/`release:major` label across the
   PRs merged since that tag; `## [Unreleased]` becomes `## [X.Y.Z] - date`, the
   manifests and `Cargo.lock` are synced, `Release vX.Y.Z [skip ci]` is pushed to
@@ -438,31 +492,6 @@ touch no code (questions, exploration) need no branch.
     deploy key in secret `RELEASE_DEPLOY_KEY`, passed explicitly to the release
     job. Without it the job fails with the setup commands. Rotating = new deploy
     key + `gh secret set RELEASE_DEPLOY_KEY`, then delete the old key.
-  - **Never bump the version or create a tag by hand**; `just version` is for
-    emergencies only.
-
-### When to add the `windows` label
-
-Windows CI runs only on PRs with the `windows` label; it always runs after
-merge to `main` and gates the release. Add `windows` to a PR when it:
-
-- touches `cfg(windows)`, `cfg(unix)` or `target_os` code, or platform-specific modules
-- changes file paths, path separators, drive letters or case sensitivity; process spawning, PTY or shell quoting; environment variables; WSL
-- changes the Windows settings in `tauri.conf.json` (bundle, NSIS) or installer scripts
-- adds or upgrades a dependency with platform-specific code (`tauri`, `windows-rs`, `portable-pty`, …) or bumps the Rust toolchain
-- fixes a Windows bug
-
-Skip it for frontend-only, docs-only and purely cross-platform logic changes. If unsure, add it: `main` runs Windows after the merge anyway, and a failure there blocks the release.
-
-Windows-sensitive spots in this repo:
-
-- `src-tauri/src/main.rs` (`windows_subsystem`), `src-tauri/src/lib.rs` (`cfg(target_os = "macos")` menu and `Emitter` import: Windows/Linux have none)
-- `src-tauri/tauri.windows.conf.json` (no decorations, NSIS-only bundle) and `src-tauri/tauri.conf.json` (`bundle`, icons); the custom title bar in `src/App.tsx`
-- file-backed tabs and path handling: `src-tauri/src/commands/fs.rs` (`dunce` canonicalisation of `\\?\` paths, allowed roots), plus export/import paths in `commands/export.rs`, `commands/import.rs`, `commands/multi.rs`
-- `keyring` backends (`windows-native` vs `apple-native` vs `sync-secret-service`) in `crates/selene-core/Cargo.toml`, `crates/selene-core/src/secret.rs` and `crates/selene-core/src/secrets/`
-- SQLite file paths (`crates/selene-core/src/driver/sqlite/`) and file export/import (`crates/selene-core/src/export/`, `import/`)
-
-The Windows job tests `-p selene-core` only (`windows-test-scope`); the Tauri shell is compiled and clippy-checked there, not tested.
 
 - **Not yet set up:** Conventional Commits, pre-commit hooks,
   signed/notarized releases, and auto-update.
