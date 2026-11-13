@@ -215,6 +215,15 @@
   overflow: hidden;
 }
 
+/* Glass: same more-opaque fill as the main editor (EditorPane .editorWrap). */
+:global(:root[data-theme="glass-dark"]) .editor {
+  background: rgba(18, 22, 38, 0.85);
+}
+
+:global(:root[data-theme="glass-light"]) .editor {
+  background: rgba(255, 255, 255, 0.72);
+}
+
 /* ── Resolved preview / pick list ────────────────────────────────────────── */
 
 .resolved {
