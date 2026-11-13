@@ -10,6 +10,8 @@ when it merges.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-13
+
 ### Added
 
 - **Glass themes.** Two new themes, Glass dark and Glass light, in Settings →
