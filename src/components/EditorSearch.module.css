@@ -18,9 +18,8 @@
   transform-origin: top right;
 }
 
-:global(:root[data-theme^="glass"]) .panel {
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+.panel {
+  composes: glass from global;
 }
 
 .panel[data-state="open"] {

@@ -31,9 +31,8 @@
 
 /* Only under glass: backdrop-filter makes a containing block for fixed
    children, which would trap nested overlays in the other themes. */
-:global(:root[data-theme^="glass"]) .card {
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+.card {
+  composes: glass from global;
 }
 
 .card[data-state="open"] {

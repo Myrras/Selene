@@ -115,9 +115,8 @@
 
 /* Glass: frosted island. The editor area gets its own, more opaque fill so
    syntax colours keep >=4.5:1 over a bright canvas patch. */
-:global(:root[data-theme^="glass"]) .editorIsland {
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+.editorIsland {
+  composes: glass from global;
 }
 
 :global(:root[data-theme="glass-dark"]) .editorWrap {

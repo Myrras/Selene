@@ -21,9 +21,8 @@
   padding: var(--sp-2) var(--sp-3);
 }
 
-:global(:root[data-theme^="glass"]) .toast {
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+.toast {
+  composes: glass from global;
 }
 
 .toast[data-state="open"] {

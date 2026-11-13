@@ -84,9 +84,8 @@
   animation: menuIn var(--dur-2) var(--ease-out);
 }
 
-:global(:root[data-theme^="glass"]) .menu {
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+.menu {
+  composes: glass from global;
 }
 
 .menuItem {

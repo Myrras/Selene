@@ -70,6 +70,8 @@
    * The `*-solid` fills back sticky headers that content scrolls under, which
    * must stay opaque even when the surfaces are translucent.
    */
+  /* WebKit ignores var() in backdrop-filter: these only document the values;
+     the literals live in global.css `.glass`. Keep them in sync. */
   --glass-blur: 0px;
   --glass-sat: 100%;
   --glass-hi: transparent;

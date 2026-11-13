@@ -16,10 +16,9 @@
   transform-origin: top left;
 }
 
-:global(:root[data-theme^="glass"]) .menu,
-:global(:root[data-theme^="glass"]) .submenu {
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+.menu,
+.submenu {
+  composes: glass from global;
 }
 
 .menu[data-state="open"] {

@@ -1,4 +1,5 @@
 .pane {
+  composes: glass from global;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -13,8 +14,6 @@
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-md);
   overflow: hidden;
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
 }
 
 .loading {

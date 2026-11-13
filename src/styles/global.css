@@ -275,3 +275,17 @@ html[data-reduce-motion="true"] *::after {
   transition-duration: 0.01ms !important;
   scroll-behavior: auto !important;
 }
+
+/* Frosted overlays. WebKit (Safari, Tauri macOS) treats any var() inside
+   backdrop-filter as `none`, so the values are literal per theme and must
+   match --glass-blur / --glass-sat in tokens.css. Used via
+   `composes: glass from global;`. */
+:root[data-theme="glass-dark"] .glass {
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  backdrop-filter: blur(40px) saturate(180%);
+}
+
+:root[data-theme="glass-light"] .glass {
+  -webkit-backdrop-filter: blur(30px) saturate(160%);
+  backdrop-filter: blur(30px) saturate(160%);
+}
