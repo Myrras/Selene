@@ -607,11 +607,7 @@ fn is_txn_wrapped_no_semi(sanitized: &str, dml_only: bool, allow_commit: bool) -
     }
 
     // Countable-DML path: at least one explicit DML verb required.
-    if dml_only && !saw_dml {
-        return false;
-    }
-
-    true
+    !dml_only || saw_dml
 }
 
 /// Blank out top-level `(…)` groups — subqueries, column lists, `VALUES`
