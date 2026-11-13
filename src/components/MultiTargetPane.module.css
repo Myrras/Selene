@@ -1,9 +1,19 @@
 .pane {
+  composes: glass from global;
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
   background: var(--bg);
+}
+
+/* Glass: the pane becomes a frosted island like the sidebar. */
+:global(:root[data-theme^="glass"]) .pane {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
 }
 
 .loading {
@@ -202,6 +212,15 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   overflow: hidden;
+}
+
+/* Glass: same more-opaque fill as the main editor (EditorPane .editorWrap). */
+:global(:root[data-theme="glass-dark"]) .editor {
+  background: rgba(18, 22, 38, 0.85);
+}
+
+:global(:root[data-theme="glass-light"]) .editor {
+  background: rgba(255, 255, 255, 0.72);
 }
 
 /* ── Resolved preview / pick list ────────────────────────────────────────── */

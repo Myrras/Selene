@@ -33,6 +33,13 @@ body {
   flex-direction: column;
 }
 
+/* Glass: the gradient canvas is the window backdrop. Its layers are
+   viewport-fixed, so the titlebar and island gap (which also paint --canvas)
+   continue it seamlessly. */
+:root[data-theme^="glass"] body {
+  background: var(--canvas);
+}
+
 /* Custom title bar drag handle (Windows, where decorations are off). WebView2
    uses the CSS app-region for window dragging incl. touch/pen; interactive
    children opt back out with `app-region: no-drag`. No-op on macOS (the native
@@ -176,6 +183,12 @@ label {
   transition: background var(--dur-2) var(--ease-out);
 }
 
+/* A translucent --bg border would tint the thumb; clip the fill instead. */
+:root[data-theme^="glass"] ::-webkit-scrollbar-thumb {
+  border-color: transparent;
+  background-clip: padding-box;
+}
+
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-faint);
 }
@@ -261,4 +274,18 @@ html[data-reduce-motion="true"] *::after {
   animation-iteration-count: 1 !important;
   transition-duration: 0.01ms !important;
   scroll-behavior: auto !important;
+}
+
+/* Frosted overlays. WebKit (Safari, Tauri macOS) treats any var() inside
+   backdrop-filter as `none`, so the values are literal per theme and must
+   match --glass-blur / --glass-sat in tokens.css. Used via
+   `composes: glass from global;`. */
+:root[data-theme="glass-dark"] .glass {
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  backdrop-filter: blur(40px) saturate(180%);
+}
+
+:root[data-theme="glass-light"] .glass {
+  -webkit-backdrop-filter: blur(30px) saturate(160%);
+  backdrop-filter: blur(30px) saturate(160%);
 }

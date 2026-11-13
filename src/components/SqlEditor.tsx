@@ -22,11 +22,12 @@ import { search } from "@codemirror/search";
 import { githubDark, githubLight } from "@uiw/codemirror-theme-github";
 
 import type { DriverId } from "../ipc/types";
+import { glassEditorExtensions } from "../lib/glassEditorTheme";
 import { keepIndentOnEnter } from "../lib/editorKeymap";
 import { scrollSafeFocus } from "../lib/scrollSafeFocus";
 import { dialectFor } from "../lib/sqlDialect";
 import { selectSql, useEditorStore } from "../state/editorStore";
-import { useThemeStore } from "../state/themeStore";
+import { isDarkTheme, useThemeStore } from "../state/themeStore";
 import { useSettingsStore } from "../state/settingsStore";
 import { EditorSearch } from "./EditorSearch";
 import styles from "./SqlEditor.module.css";
@@ -130,6 +131,8 @@ export function SqlEditor({
         : [],
     [themeMode],
   );
+
+  const glassBg = useMemo(() => glassEditorExtensions(themeMode), [themeMode]);
 
   // Extensions rebuilt when run binding, editor settings, or the driver change.
   const extensions = useMemo(() => {
@@ -245,8 +248,8 @@ export function SqlEditor({
   // `retroBg` change — not on every keystroke-driven re-render (each new array
   // identity triggers a full CodeMirror reconfigure).
   const allExtensions = useMemo(
-    () => [...extensions, ...retroBg],
-    [extensions, retroBg],
+    () => [...extensions, ...retroBg, ...glassBg],
+    [extensions, retroBg, glassBg],
   );
 
   // Memoized for the same reason: @uiw/react-codemirror re-dispatches a full
@@ -272,7 +275,7 @@ export function SqlEditor({
       <CodeMirror
         value={value}
         height="100%"
-        theme={themeMode === "dark" ? githubDark : githubLight}
+        theme={isDarkTheme(themeMode) ? githubDark : githubLight}
         extensions={allExtensions}
         onChange={handleChange}
         onCreateEditor={(v) => {

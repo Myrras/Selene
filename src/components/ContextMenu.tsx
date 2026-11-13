@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { MOTION, usePresence } from "../lib/motion";
 import styles from "./ContextMenu.module.css";
@@ -105,7 +106,9 @@ export function ContextMenu({
 
   if (!mounted) return null;
 
-  return (
+  // Portaled to <body> so a glass island's backdrop-filter can't become the
+  // containing block of this position:fixed menu (see Modal).
+  return createPortal(
     <div
       className={styles.backdrop}
       role="presentation"
@@ -143,6 +146,7 @@ export function ContextMenu({
           ),
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

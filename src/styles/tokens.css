@@ -1,6 +1,6 @@
 /**
  * Design tokens for Selene. Dark-theme-first: the defaults on :root are the
- * dark palette; `:root[data-theme="light"]` overrides them. Components only
+ * dark palette; `:root[data-theme="…"]` blocks override them. Components only
  * ever reference these variables, never hard-coded colors.
  */
 
@@ -63,6 +63,24 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);
   --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.55);
+
+  /*
+   * Glass. Neutral here so the solid themes render unchanged; the glass themes
+   * override them. `--pop-surface` fills modals, menus, toasts and popovers.
+   * The `*-solid` fills back sticky headers that content scrolls under, which
+   * must stay opaque even when the surfaces are translucent.
+   */
+  /* WebKit ignores var() in backdrop-filter: these only document the values;
+     the literals live in global.css `.glass`. Keep them in sync. */
+  --glass-blur: 0px;
+  --glass-sat: 100%;
+  --glass-hi: transparent;
+  --pop-surface: var(--surface);
+  --overlay: rgba(0, 0, 0, 0.55);
+  --bg-solid: var(--bg);
+  --surface-solid: var(--surface);
+  --surface-2-solid: var(--surface-2);
+  --grid-sel: color-mix(in srgb, var(--accent) 14%, transparent);
 
   /*
    * Motion. The whole UI animates from this one scale — components reference
@@ -148,4 +166,110 @@
   --shadow-sm: 0 1px 2px rgba(60, 56, 54, 0.12);
   --shadow-md: 0 4px 16px rgba(60, 56, 54, 0.18);
   --shadow-lg: 0 12px 40px rgba(60, 56, 54, 0.24);
+}
+
+/*
+ * Glass dark. Translucent islands over a radial-gradient canvas. Shared recipe
+ * with the sibling apps: canvas patches at 50% strength and a smoked island
+ * fill, so body, muted and accent text stay >= 4.5:1 even over the brightest
+ * patch. Accent stays the dark theme's.
+ */
+:root[data-theme="glass-dark"] {
+  --canvas:
+    radial-gradient(
+        55% 65% at 12% 18%,
+        rgba(44, 92, 255, 0.5) 0%,
+        rgba(44, 92, 255, 0) 70%
+      )
+      fixed,
+    radial-gradient(
+        45% 55% at 88% 22%,
+        rgba(155, 77, 255, 0.5) 0%,
+        rgba(155, 77, 255, 0) 70%
+      )
+      fixed,
+    radial-gradient(
+        55% 55% at 62% 100%,
+        rgba(15, 184, 165, 0.5) 0%,
+        rgba(15, 184, 165, 0) 70%
+      )
+      fixed,
+    #060912;
+  --bg: rgba(255, 255, 255, 0.06);
+  --surface: rgba(18, 22, 38, 0.75);
+  --surface-2: rgba(255, 255, 255, 0.1);
+  --surface-hover: rgba(255, 255, 255, 0.14);
+  --border: rgba(255, 255, 255, 0.14);
+  --border-strong: rgba(255, 255, 255, 0.22);
+
+  --text: #f5f7fb;
+  --text-muted: rgba(240, 244, 255, 0.84);
+  --text-faint: rgba(240, 244, 255, 0.68);
+
+  --warning: #ff9f0a;
+  --success: #30d158;
+
+  --glass-blur: 40px;
+  --glass-sat: 180%;
+  --glass-hi: rgba(255, 255, 255, 0.22);
+  --pop-surface: rgba(22, 26, 44, 0.85);
+  --overlay: rgba(4, 6, 14, 0.4);
+  --bg-solid: #1d212e;
+  --surface-solid: #0f1321;
+  --surface-2-solid: #343743;
+  --grid-sel: rgba(68, 147, 248, 0.4);
+
+  --shadow-sm: inset 0 1px 0 var(--glass-hi), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: inset 0 1px 0 var(--glass-hi), 0 10px 40px rgba(0, 0, 0, 0.35);
+  --shadow-lg: inset 0 1px 0 var(--glass-hi), 0 30px 80px rgba(0, 0, 0, 0.45);
+}
+
+/* Glass light ("Frost"): white frosted islands over a pastel canvas. */
+:root[data-theme="glass-light"] {
+  --canvas:
+    radial-gradient(50% 60% at 10% 12%, #ffc9a8 0%, rgba(255, 201, 168, 0) 70%)
+      fixed,
+    radial-gradient(50% 60% at 92% 18%, #a9c8ff 0%, rgba(169, 200, 255, 0) 70%)
+      fixed,
+    radial-gradient(60% 55% at 55% 100%, #bfeedd 0%, rgba(191, 238, 221, 0) 70%)
+      fixed,
+    #eef1f6;
+  --bg: rgba(255, 255, 255, 0.45);
+  --surface: rgba(255, 255, 255, 0.55);
+  --surface-2: rgba(20, 30, 60, 0.07);
+  /* A dark tint, not the mock's white: white on a white island hides hover. */
+  --surface-hover: rgba(20, 30, 60, 0.11);
+  --border: rgba(20, 30, 60, 0.09);
+  --border-strong: rgba(20, 30, 60, 0.16);
+
+  --text: #1d1d1f;
+  --text-muted: rgba(29, 29, 31, 0.74);
+  --text-faint: rgba(29, 29, 31, 0.62);
+
+  --accent: #0a5cc0; /* mock #0a66d6 is 4.3:1 as text on the blue patch */
+  --accent-hover: #084fa6;
+  --accent-contrast: #ffffff;
+
+  --danger: #cf222e;
+  --danger-bg: #ffebe9;
+  --warning: #9a6700;
+  --warning-bg: #fff8c5;
+  --success: #1a7f37;
+  --info: #0a5cc0;
+
+  --glass-blur: 30px;
+  --glass-sat: 160%;
+  --glass-hi: rgba(255, 255, 255, 0.95);
+  --pop-surface: rgba(255, 255, 255, 0.7);
+  --overlay: rgba(40, 50, 90, 0.18);
+  --bg-solid: #fbfcfd;
+  --surface-solid: #f7f9fb;
+  --surface-2-solid: #ebedf0;
+  --grid-sel: rgba(10, 92, 192, 0.14);
+
+  --shadow-sm: inset 0 1px 0 var(--glass-hi), 0 1px 3px rgba(20, 30, 60, 0.08);
+  --shadow-md:
+    inset 0 1px 0 var(--glass-hi), 0 10px 30px rgba(40, 50, 90, 0.12);
+  --shadow-lg:
+    inset 0 1px 0 var(--glass-hi), 0 30px 80px rgba(40, 50, 90, 0.25);
 }

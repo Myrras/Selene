@@ -113,6 +113,20 @@
   overflow: hidden;
 }
 
+/* Glass: frosted island. The editor area gets its own, more opaque fill so
+   syntax colours keep >=4.5:1 over a bright canvas patch. */
+.editorIsland {
+  composes: glass from global;
+}
+
+:global(:root[data-theme="glass-dark"]) .editorWrap {
+  background: rgba(18, 22, 38, 0.85);
+}
+
+:global(:root[data-theme="glass-light"]) .editorWrap {
+  background: rgba(255, 255, 255, 0.72);
+}
+
 /* Results island: a lighter surface card. Its ResultsPanel fills it; the panel's
    opaque toolbar (top) and status bar (bottom) mask the rounded corners, so the
    inner virtualized grid can stay square and scroll cleanly. */

@@ -9,11 +9,16 @@
   z-index: 61;
   min-width: 200px;
   padding: var(--sp-1);
-  background: var(--surface);
+  background: var(--pop-surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
   transform-origin: top left;
+}
+
+.menu,
+.submenu {
+  composes: glass from global;
 }
 
 .menu[data-state="open"] {
@@ -81,7 +86,7 @@
   z-index: 62;
   min-width: 180px;
   padding: var(--sp-1);
-  background: var(--surface);
+  background: var(--pop-surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);

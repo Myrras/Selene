@@ -10,6 +10,11 @@ when it merges.
 
 ## [Unreleased]
 
+### Added
+
+- **Glass themes.** Two new themes, Glass dark and Glass light, in Settings →
+  Appearance: frosted, translucent panels over a soft colour-gradient backdrop.
+
 ## [1.4.19] - 2026-10-29
 
 ### Security
