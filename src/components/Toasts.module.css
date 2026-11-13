@@ -13,12 +13,17 @@
   display: flex;
   align-items: flex-start;
   gap: var(--sp-2);
-  background: var(--surface);
+  background: var(--pop-surface);
   border: 1px solid var(--border-strong);
   border-left-width: 3px;
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
   padding: var(--sp-2) var(--sp-3);
+}
+
+:global(:root[data-theme^="glass"]) .toast {
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
 }
 
 .toast[data-state="open"] {

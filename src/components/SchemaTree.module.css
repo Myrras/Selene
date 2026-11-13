@@ -10,7 +10,7 @@
   font-weight: 600;
   position: sticky;
   top: 0;
-  background: var(--surface);
+  background: var(--surface-solid); /* sticky: rows scroll underneath */
   z-index: 1;
 }
 

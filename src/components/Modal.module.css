@@ -1,7 +1,7 @@
 .overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -17,7 +17,7 @@
 }
 
 .card {
-  background: var(--surface);
+  background: var(--pop-surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
@@ -27,6 +27,13 @@
   flex-direction: column;
   outline: none;
   transform-origin: center;
+}
+
+/* Only under glass: backdrop-filter makes a containing block for fixed
+   children, which would trap nested overlays in the other themes. */
+:global(:root[data-theme^="glass"]) .card {
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
 }
 
 .card[data-state="open"] {

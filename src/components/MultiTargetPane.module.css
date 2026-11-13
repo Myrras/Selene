@@ -6,6 +6,17 @@
   background: var(--bg);
 }
 
+/* Glass: the pane becomes a frosted island like the sidebar. */
+:global(:root[data-theme^="glass"]) .pane {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+}
+
 .loading {
   padding: var(--sp-4);
   color: var(--text-muted);

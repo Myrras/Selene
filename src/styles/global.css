@@ -33,6 +33,13 @@ body {
   flex-direction: column;
 }
 
+/* Glass: the gradient canvas is the window backdrop. Its layers are
+   viewport-fixed, so the titlebar and island gap (which also paint --canvas)
+   continue it seamlessly. */
+:root[data-theme^="glass"] body {
+  background: var(--canvas);
+}
+
 /* Custom title bar drag handle (Windows, where decorations are off). WebView2
    uses the CSS app-region for window dragging incl. touch/pen; interactive
    children opt back out with `app-region: no-drag`. No-op on macOS (the native
@@ -174,6 +181,12 @@ label {
   border-radius: 6px;
   border: 2px solid var(--bg);
   transition: background var(--dur-2) var(--ease-out);
+}
+
+/* A translucent --bg border would tint the thumb; clip the fill instead. */
+:root[data-theme^="glass"] ::-webkit-scrollbar-thumb {
+  border-color: transparent;
+  background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
