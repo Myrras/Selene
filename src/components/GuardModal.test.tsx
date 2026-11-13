@@ -11,10 +11,9 @@ import { GuardModal } from "./GuardModal";
 
 describe("GuardModal", () => {
   it("renders nothing when there is no pending verdict", () => {
-    const { container } = render(
-      <GuardModal state={null} onConfirm={vi.fn()} onCancel={vi.fn()} />,
-    );
-    expect(container).toBeEmptyDOMElement();
+    render(<GuardModal state={null} onConfirm={vi.fn()} onCancel={vi.fn()} />);
+    // Modal portals to document.body, so the render container is always empty.
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("confirm: lists the reasons and offers Run anyway / Cancel", async () => {
