@@ -7,6 +7,10 @@ import { prefersReducedMotion } from "../lib/motion";
 export type ThemeMode =
   "dark" | "light" | "retro" | "glass-dark" | "glass-light";
 
+/** Dark-palette themes (glass-dark included); drives the CodeMirror base theme. */
+export const isDarkTheme = (mode: ThemeMode): boolean =>
+  mode === "dark" || mode === "glass-dark";
+
 /** `document` augmented with the (still newish) View Transitions API. */
 type ViewTransitionDocument = Document & {
   startViewTransition?: (callback: () => void) => unknown;

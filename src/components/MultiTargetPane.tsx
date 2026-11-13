@@ -46,7 +46,7 @@ import {
 } from "../state/multiTargetStore";
 import type { ProgressBuffer, TargetProgress } from "../state/multiTargetStore";
 import { useSettingsStore } from "../state/settingsStore";
-import { useThemeStore } from "../state/themeStore";
+import { isDarkTheme, useThemeStore } from "../state/themeStore";
 import { toastError, toastInfo, useToastStore } from "../state/toastStore";
 import { GuardModal } from "./GuardModal";
 import { Modal } from "./Modal";
@@ -1132,7 +1132,7 @@ function MiniSqlEditor({
         onChange={onChange}
         height={height}
         minHeight={minHeight}
-        theme={themeMode === "dark" ? githubDark : githubLight}
+        theme={isDarkTheme(themeMode) ? githubDark : githubLight}
         extensions={extensions}
         basicSetup={{
           lineNumbers: true,

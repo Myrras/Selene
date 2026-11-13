@@ -17,16 +17,25 @@ import { javascript } from "@codemirror/lang-javascript";
 import type { CompletionSource } from "@codemirror/autocomplete";
 import { EditorView, keymap } from "@codemirror/view";
 import { Prec } from "@codemirror/state";
-import { indentUnit } from "@codemirror/language";
+import {
+  HighlightStyle,
+  indentUnit,
+  syntaxHighlighting,
+} from "@codemirror/language";
 import { search } from "@codemirror/search";
-import { githubDark, githubLight } from "@uiw/codemirror-theme-github";
+import {
+  githubDark,
+  githubDarkStyle,
+  githubLight,
+  githubLightStyle,
+} from "@uiw/codemirror-theme-github";
 
 import type { DriverId } from "../ipc/types";
 import { keepIndentOnEnter } from "../lib/editorKeymap";
 import { scrollSafeFocus } from "../lib/scrollSafeFocus";
 import { dialectFor } from "../lib/sqlDialect";
 import { selectSql, useEditorStore } from "../state/editorStore";
-import { useThemeStore } from "../state/themeStore";
+import { isDarkTheme, useThemeStore } from "../state/themeStore";
 import { useSettingsStore } from "../state/settingsStore";
 import { EditorSearch } from "./EditorSearch";
 import styles from "./SqlEditor.module.css";
@@ -57,6 +66,17 @@ interface SqlEditorProps {
    */
   viewRef?: React.MutableRefObject<EditorView | null>;
 }
+
+const isGlassTheme = (mode: string) => mode.startsWith("glass");
+
+/** githubDark/githubLight colours below 4.5:1 on the glass fill, replaced. */
+const GLASS_SYNTAX: Record<string, string> = {
+  "#8b949e": "#a3adb9", // dark comment 3.7 -> 5.05
+  "#ff7b72": "#ff8a82", // dark keyword 4.55 -> 5.04
+  "#d73a49": "#c42335", // light keyword 3.98 -> 5.02
+  "#6a737d": "#59626d", // light comment 4.19 -> 5.38
+  "#005cc5": "#0550ae", // light number 5.47 -> 6.6
+};
 
 export function SqlEditor({
   tabId,
@@ -130,6 +150,38 @@ export function SqlEditor({
         : [],
     [themeMode],
   );
+
+  // Glass: the editor sits on the island's own fill (EditorPane.module.css), so
+  // CodeMirror's opaque paper goes transparent. Syntax colours that fall under
+  // 4.5:1 on the glass fill are swapped for darker/lighter ones.
+  const glassBg = useMemo(() => {
+    if (!isGlassTheme(themeMode)) return [];
+    const dark = isDarkTheme(themeMode);
+    const tint = dark ? "rgba(255,255,255,0.06)" : "rgba(20,30,60,0.06)";
+    return [
+      Prec.highest(
+        EditorView.theme({
+          "&": { background: "transparent" },
+          ".cm-gutters": {
+            background: "transparent",
+            borderRight: "1px solid var(--border)",
+          },
+          ".cm-activeLine": { background: tint },
+          ".cm-activeLineGutter": { background: tint },
+        }),
+      ),
+      Prec.highest(
+        syntaxHighlighting(
+          HighlightStyle.define(
+            (dark ? githubDarkStyle : githubLightStyle).map((r) => ({
+              ...r,
+              color: GLASS_SYNTAX[String(r.color)] ?? r.color,
+            })),
+          ),
+        ),
+      ),
+    ];
+  }, [themeMode]);
 
   // Extensions rebuilt when run binding, editor settings, or the driver change.
   const extensions = useMemo(() => {
@@ -245,8 +297,8 @@ export function SqlEditor({
   // `retroBg` change — not on every keystroke-driven re-render (each new array
   // identity triggers a full CodeMirror reconfigure).
   const allExtensions = useMemo(
-    () => [...extensions, ...retroBg],
-    [extensions, retroBg],
+    () => [...extensions, ...retroBg, ...glassBg],
+    [extensions, retroBg, glassBg],
   );
 
   // Memoized for the same reason: @uiw/react-codemirror re-dispatches a full
@@ -272,7 +324,7 @@ export function SqlEditor({
       <CodeMirror
         value={value}
         height="100%"
-        theme={themeMode === "dark" ? githubDark : githubLight}
+        theme={isDarkTheme(themeMode) ? githubDark : githubLight}
         extensions={allExtensions}
         onChange={handleChange}
         onCreateEditor={(v) => {
